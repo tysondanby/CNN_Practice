@@ -1,6 +1,7 @@
-
+using Metalhead, Flux
 convolutional_layers = 2
-kernelsize = [3,3]
-padding = [1,0]
+kernelsizes = [(3,3),(3,3)]
+padding = [0,0]
+dilation = [1,1]
 traditional_layers = 2 # not including output
 nodesperlayer = 5
