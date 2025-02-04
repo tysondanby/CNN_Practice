@@ -27,3 +27,11 @@ function pointhistogramadjust(x , initial, final)
         return (x-initial)*(1-final)/(1-initial) + final
     end
 end
+
+function pointscenter(points)
+    sum = points[1] .- points[1]
+    for i = 1:1:length(points)
+        sum = sum .+ points[i]
+    end
+    return sum ./ length(points)
+end

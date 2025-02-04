@@ -1,4 +1,4 @@
-include("math.jl")
+include(pwd()*"/LIB/math.jl")
 function threshold(img,val)
     imgsize = size(img)
     newimg = zeros(imgsize)
@@ -307,6 +307,36 @@ function percentilethreshold!(img::Matrix{T1},pctl) where T1<:Union{RGB{T2}, Gra
             img[i] = 1
         else
             img[i] = 0
+        end
+    end
+end
+
+function filterfartherthan!(img,imgfilter,distance)
+    sizeimg = size(img)#should be same as imgfilter TODO: @assert
+    #build imgfilter
+    usedfilter = copy(imgfilter)
+    for i = 1:1:sizeimg[1]
+        for j = 1:1:sizeimg[2]
+            for  k = 1:1:sizeimg[1]
+                for  l = 1:1:sizeimg[2]
+                    if imgfilter[k,l] == 1
+                        if ((i-k)^2 + (j-l)^2) < (distance^2)
+                            usedfilter[i,j] = 1
+                            @goto outsidetheloop
+                        end
+                    end
+                end
+            end
+            @label outsidetheloop
+        end
+    end
+    for i = 1:1:sizeimg[1]
+        for j = 1:1:sizeimg[2]
+            if (img[i,j] == 1) && (usedfilter[i,j] == 1)
+                img[i,j] = 1
+            else
+                img[i,j] = 0
+            end
         end
     end
 end
