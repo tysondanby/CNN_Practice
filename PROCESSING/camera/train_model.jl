@@ -1,3 +1,24 @@
+#-----ENVIRONMENT SETUP-------------------------------------------------------
+using Pkg
+Pkg.activate(@__DIR__) 
+required_packages = ["Metalhead", "Flux", "MLUtils", "Images", "CSV", "DataFrames"]
+function is_installed(pkg)
+  return haskey(Pkg.project().dependencies, pkg)
+end
+function ensure_packages(packages)
+    for pkg in packages
+        if !is_installed(pkg)
+            println("Installing missing package: ", pkg)
+            Pkg.add(pkg)
+        end
+    end
+end
+ensure_packages(required_packages)
+Pkg.instantiate() 
+working_dir = dirname(dirname(@__DIR__))
+cd(working_dir)
+#-----END ENVIRONMENT SETUP---------------------------------------------------
+
 using Metalhead, Flux, MLUtils, Images, CSV, DataFrames
 previously_loaded = false
 

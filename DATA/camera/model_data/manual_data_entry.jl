@@ -1,7 +1,27 @@
+#-----ENVIRONMENT SETUP-------------------------------------------------------
+using Pkg
+Pkg.activate(@__DIR__) 
+required_packages = ["GLMakie", "Images", "CSV", "DataFrames"]
+function is_installed(pkg)
+    return haskey(Pkg.project().dependencies, pkg)
+end
+function ensure_packages(packages)
+    for pkg in packages
+        if !is_installed(pkg)
+            println("Installing missing package: ", pkg)
+            Pkg.add(pkg)
+        end
+    end
+end
+ensure_packages(required_packages)
+Pkg.instantiate()
+working_dir = dirname(dirname(dirname(@__DIR__)))
+cd(working_dir)
+#-----END ENVIRONMENT SETUP---------------------------------------------------
+
 using GLMakie, Images, CSV, DataFrames
 include(pwd()*"/LIB/arrayoperations.jl")
 include(pwd()*"/LIB/math.jl")
-
 threebladed = [4 8]
 imagedirectory = "DATA/camera/prepared"
 
@@ -75,7 +95,12 @@ function reorderclockwisefromtop(points)
 end
 
 function characterizesingleimage()
+    traincsv = CSV.File("DATA/camera/model_data/train.csv")
+    verifycsv = CSV.File("DATA/camera/model_data/verify.csv")
     imagename = selectrandom(readdir(imagedirectory))
+    while contains(traincsv.filename,imagename) || contains(verifycsv.filename,imagename)
+        imagename = selectrandom(readdir(imagedirectory))
+    end
     img = load(imagedirectory*"/"*imagename)
     propeller = getpropellerfromimagename(imagename)
 
