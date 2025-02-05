@@ -1,5 +1,5 @@
-using Metalhead, Flux
-previously_loaded = true
+using Metalhead, Flux, MLUtils, Images, CSV, DataFrames
+previously_loaded = false
 
 function lpnormpoolinglayer(x)
     return lpnormpool(x,Float32(0.5),(3,3)) ./ Float32(81)
@@ -9,17 +9,150 @@ function getfirstlayer()
     return Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,MaxPool((3,3)),MeanPool((3,3)),lpnormpoolinglayer)
 end
 
-function getdata(;set = "training")
+
+function getlossfunc()
+  return  function lossfunction(yhat,y)
+            return sum((yhat .- y).^2)
+          end
 end
 
-if previously_loaded == false
+function updatetrainingepochsbybatchcsv(nbatches::Int)
+  csvname ="PROCESSING/camera/trainingepochsbybatch.csv"
+  historycsv = CSV.File(csvname)
+  newbatches = nbatches - length(historycsv.batch)
+  if newbatches > 0
+    lastbatchnumber = historycsv.batch[end]
+    for i = 1:1:newbatches
+      push!(historycsv.batch,lastbatchnumber+i)
+      push!(historycsv.epochs,0)
+    end
+    CSV.write(csvname,DataFrame(historycsv))
+  end
+end
+
+function updatetrainingepochsbybatchcsv(batchestrained,epochstrainedeach)
+  csvname ="PROCESSING/camera/trainingepochsbybatch.csv"
+  historycsv = CSV.File(csvname)
+  for (i, batchnumber) in enumerate(batchestrained)
+    historycsv.epochs[batchnumber] = historycsv.epochs[batchnumber] + epochstrainedeach[i]
+  end
+  CSV.write(csvname,DataFrame(historycsv))
+end
+
+function gettrainingdatabatch(batchsize,batchnumber,datacsv)
+  batch = []::Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}
+  for imagenumber = 1:1:batchsize
+    datacsvindex = 1+imagenumber + batchsize*(batchnumber-1)
+    imgname = datacsv.filename[datacsvindex]
+    img = Float32.(Images.load("DATA/camera/prepared/"*imgname))
+    fourdimensionalimage = zeros(Float32,size(img)...,1,1)
+    fourdimensionalimage[:,:,1,1] = img
+    answer = Float32.([datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],datacsv.x3[datacsvindex],datacsv.y3[datacsvindex]])
+    push!(batch,(fourdimensionalimage,answer))
+  end
+  return batch
+end
+
+function gettrainingdatabatches(nbatches,batchsize,datacsv)
+  batches = []::Vector{Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}}
+  for batchnumber = 1:1:nbatches
+    push!(batches,gettrainingdatabatch(batchsize,batchnumber,datacsv))
+  end
+  return batches
+end
+
+function gettrainingdatainbatches(;batchsize = 32, set = "train")
+  datacsv = CSV.File("DATA/camera/model_data/"*set*".csv")
+  nbatches = floor((length(datacsv.filename)-1)/batchsize)
+  updatetrainingepochsbybatchcsv(nbatches)
+  return gettrainingdatabatches(nbatches,batchsize,datacsv)
+end
+
+function getmodel(;previously_loaded = false)
+  if previously_loaded == false
     pretrainmodel = ResNet(18; pretrain = true)
     pretrainedbackbone = pretrainmodel.layers[1]
     firstlayer = getfirstlayer()
     lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 100),Dense(100 => 6))
     compositemodel = Chain(firstlayer,pretrainedbackbone,lastlayers)
-else
+  else
+    #TODO: Load from the latest model save-state in PROCESSING/camera/model_states/
+  end
+  return compositemodel
 end
+
+function getnumberepochsperbatch(nepochs,epochchunksize)
+  nchunks = floor(nepochs/epochchunksize)
+  remainderepochs = nepochs - (epochchunksize*nchunks)
+  historycsv = CSV.File("PROCESSING/camera/trainingepochsbybatch.csv")
+  batches_old = historycsv.batch
+  epochs = copy(historycsv.epochs)
+
+  minindex = sortperm(epochs)[1]
+  batches    = [ batches_old[minindex] ]
+  epochseach = [ remainderepochs ]
+  epochs[minindex] = epochs[minindex] + remainderepochs
+  chunk = 1
+  while chunk <= nchunks
+    minindex = sortperm(epochs)[1]
+    push!(batches,batches_old[minindex])
+    push!(epochseach,epochchunksize)
+    epochs[minindex] = epochs[minindex] + epochchunksize
+    chunk = chunk +1
+  end
+  return batches, epochseach
+end
+
+function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
+  model = getmodel(;previously_loaded = !resetmodel)
+  trainingdata = gettrainingdatainbatches(; set = "train")#Vector{Vector{Tuple{AbstractMatrix, AbstractVector}}}
+  lossfunc = getlossfunc()
+  opt_state = Flux.setup(OptimiserChain(WeightDecay(0.42), Adam(0.1)), model)#includes regularization #Flux.setup(Adam(), model)
+
+  loss_log = []
+  batchestrained = Int32[]
+  epochstrainedeach = Int32[]
+  batches, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
+  for (batchindex, batch) in enumerate(batches)
+    push!(batchestrained,batch)
+    push!(epochstrainedeach,0)
+    currentbatchtrainingdata = trainingdata[batch]
+    for epoch in 1:epochseach[batchindex]
+      losses = Float32[]
+      for (i, data) in enumerate(currentbatchtrainingdata)
+        input, correctoutput = data
+
+        val, grads = Flux.withgradient(model) do m
+          result = m(input)
+          lossfunc(result, correctoutput)
+        end
+        push!(losses, val)
+        if !isfinite(val)
+          @warn "loss is $val on item $i" epoch
+          continue
+        end
+        Flux.update!(opt_state, model, grads[1])
+      end
+      push!(loss_log, sum(losses))
+      epochstrainedeach[end] = epochstrainedeach[end] + 1
+      if  sum(losses) < 1.0
+        println("stopping after $epoch epochs")
+        break
+      end
+    end
+  end 
+  #TODO: save model state in PROCESSING/camera/model_states/
+  #TODO: record results in lossbyepoch.csv
+  updatetrainingepochsbybatchcsv(batchestrained,epochstrainedeach)
+end
+
+#TODO: where appropriate, freeze some layers of the model
+#TODO FIRST:do manual_data_entry until a good amount of training data is availible, then train the model.
+
+
+
+
+
 
 #=
 global model = compositemodel#getmodel()
@@ -36,58 +169,6 @@ for (i, (image, y)) in enumerate(data)
     state, global model = Optimisers.update(state, model, gs);
 end
 =#
-##=
-model = compositemodel#getmodel()
-trainingdata = gettrainingdata(;set = "training")#Vector{Tuple{AbstractMatrix, AbstractVector}}
-lossfunc = getlossfunc()
-opt_state = Flux.setup(OptimiserChain(WeightDecay(0.42), Adam(0.1)), model)#includes regularization #Flux.setup(Adam(), model)
-
-my_log = []
-for epoch in 1:10
-  losses = Float32[]
-  for (i, data) in enumerate(trainingdata)
-    input, correctoutput = data
-
-    val, grads = Flux.withgradient(model) do m
-      # Any code inside here is differentiated.
-      # Evaluation of the model and loss must be inside!
-      result = m(input)
-      lossfunc(result, correctoutput)
-    end
-
-    # Save the loss from the forward pass. (Done outside of gradient.)
-    push!(losses, val)
-
-    # Detect loss of Inf or NaN. Print a warning, and then skip update!
-    if !isfinite(val)
-      @warn "loss is $val on item $i" epoch
-      continue
-    end
-
-    Flux.update!(opt_state, model, grads[1])
-  end
-
-  # Compute some accuracy, and save details as a NamedTuple
-  #acc = my_accuracy(model, trainingdata)
-  #acc,
-  push!(my_log, (; losses))
-
-  # Stop training when loss below 1
-  if  losses[end] < 1.0
-    println("stopping after $epoch epochs")
-    break
-  end
-end # =#
-
-
-
-
-
-
-
-
-
-
 
 
 #=
