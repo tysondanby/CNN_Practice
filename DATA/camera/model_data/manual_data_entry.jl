@@ -98,15 +98,16 @@ function characterizesingleimage()
     traincsv = CSV.File("DATA/camera/model_data/train.csv")
     verifycsv = CSV.File("DATA/camera/model_data/verify.csv")
     imagename = selectrandom(readdir(imagedirectory))
-    while contains(traincsv.filename,imagename) || contains(verifycsv.filename,imagename)
+    println(imagename)
+    while (imagename in traincsv) || (imagename in traincsv)
         imagename = selectrandom(readdir(imagedirectory))
     end
     img = load(imagedirectory*"/"*imagename)
     propeller = getpropellerfromimagename(imagename)
 
     #WINDOW DIALOG
-    scene = Scene(camera=campixel!,show_axis=false, resolution = size(img), padding = (10.0, 10.0))
-    image!(scene, img, interpolate=false, padding = (0.0, 0.0))
+    scene = Scene(camera=campixel!,show_axis=false, size = size(img))#, padding = (10.0, 10.0))
+    image!(scene, img, interpolate=false)#, padding = (0.0, 0.0))
     screen = display(scene)
     points = Vector{Tuple{Float64, Float64}}([])
     npoints = 0
@@ -138,7 +139,7 @@ function characterizesingleimage()
         if ispressed(scene,Mouse.right)
             npoints = npointsreset
             points = deepcopy(pointsreset)
-            image!(scene, img, interpolate=false, padding = (0.0, 0.0))
+            image!(scene, img, interpolate=false)#, padding = (0.0, 0.0))
         end
     end
     println("Click on the propeller tips. Right click to cancel, left click to confirm.")

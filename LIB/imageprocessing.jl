@@ -340,3 +340,38 @@ function filterfartherthan!(img,imgfilter,distance)
         end
     end
 end
+
+function rotate4dimage90!(fourdimensionalimage,answer)
+    resolution = size(fourdimensionalimage)[1:2]
+    referanceimage =  deepcopy(fourdimensionalimage)
+    for i = 1:1:resolution[1]
+        for j = 1:1:resolution[2]
+            fourdimensionalimage[resolution[1]+1-j,i,1,1] = referanceimage[i,j,1,1]
+        end
+    end
+    for i = 1:1:(length(answer)/2)
+        indexx = Int32(2*i-1)
+        indexy = Int32(2*i)
+        if (answer[indexx] >= 1) && (answer[indexy] >= 1)
+            refx = deepcopy(answer[indexx])
+            refy = deepcopy(answer[indexy])
+            answer[indexx] = typeof(answer[1])(673 - refy)
+            answer[indexy] = refx
+        end
+    end
+end
+
+function flip4dimageX!(fourdimensionalimage,answer)
+    resolution = size(fourdimensionalimage)[1:2]
+    referanceimage =  deepcopy(fourdimensionalimage)
+    for i = 1:1:resolution[1]
+        fourdimensionalimage[673-i,:,1,1] = referanceimage[i,:,1,1]
+    end
+    for i = 1:1:(length(answer)/2)
+        indexx = Int32(2*i-1)
+        indexy = Int32(2*i)
+        if (answer[indexx] >= 1) && (answer[indexy] >= 1)
+            answer[indexx] = typeof(answer[1])(673 - answer[indexx])
+        end
+    end
+end

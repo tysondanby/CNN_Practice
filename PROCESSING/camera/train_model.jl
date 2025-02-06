@@ -20,6 +20,7 @@ cd(working_dir)
 #-----END ENVIRONMENT SETUP---------------------------------------------------
 
 using Metalhead, Flux, MLUtils, Images, CSV, DataFrames
+include(working_dir*"/LIB/imageprocessing.jl")
 previously_loaded = false
 
 function lpnormpoolinglayer(x)
@@ -37,7 +38,7 @@ function getlossfunc()
           end
 end
 
-function updatetrainingepochsbybatchcsv(nbatches::Int)
+function updatetrainingepochsbybatchcsv(nbatches::T) where T<: Integer
   csvname ="PROCESSING/camera/trainingepochsbybatch.csv"
   historycsv = CSV.File(csvname)
   newbatches = nbatches - length(historycsv.batch)
@@ -61,30 +62,46 @@ function updatetrainingepochsbybatchcsv(batchestrained,epochstrainedeach)
 end
 
 function gettrainingdatabatch(batchsize,batchnumber,datacsv)
-  batch = []::Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}
-  for imagenumber = 1:1:batchsize
-    datacsvindex = 1+imagenumber + batchsize*(batchnumber-1)
+  batch = Tuple{Array{Float32, 4}, Vector{Float32}}[]
+  for imagenumber = 1:1:(batchsize/8)
+    datacsvindex = Int32(1+imagenumber + (batchsize/8)*(batchnumber-1))
     imgname = datacsv.filename[datacsvindex]
     img = Float32.(Images.load("DATA/camera/prepared/"*imgname))
     fourdimensionalimage = zeros(Float32,size(img)...,1,1)
     fourdimensionalimage[:,:,1,1] = img
     answer = Float32.([datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],datacsv.x3[datacsvindex],datacsv.y3[datacsvindex]])
-    push!(batch,(fourdimensionalimage,answer))
+    #do 8 transformed copies:
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#0deg
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#90deg
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#180deg
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#270deg
+    rotate4dimage90!(fourdimensionalimage,answer)
+    flip4dimageX!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#0deg-flipped
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#90deg-flipped
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#180deg-flipped
+    rotate4dimage90!(fourdimensionalimage,answer)
+    push!(batch,deepcopy((fourdimensionalimage,answer)))#270deg-flipped
   end
   return batch
 end
 
 function gettrainingdatabatches(nbatches,batchsize,datacsv)
-  batches = []::Vector{Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}}
+  batches = Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}[]
   for batchnumber = 1:1:nbatches
     push!(batches,gettrainingdatabatch(batchsize,batchnumber,datacsv))
   end
   return batches
 end
 
-function gettrainingdatainbatches(;batchsize = 32, set = "train")
+function gettrainingdatainbatches(;batchsize = 32, set = "train")#Batchsize MUST be divisible by 8
   datacsv = CSV.File("DATA/camera/model_data/"*set*".csv")
-  nbatches = floor((length(datacsv.filename)-1)/batchsize)
+  nbatches = Int32(floor((length(datacsv.filename)-1)*8/batchsize))
   updatetrainingepochsbybatchcsv(nbatches)
   return gettrainingdatabatches(nbatches,batchsize,datacsv)
 end
@@ -95,11 +112,10 @@ function getmodel(;previously_loaded = false)
     pretrainedbackbone = pretrainmodel.layers[1]
     firstlayer = getfirstlayer()
     lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 100),Dense(100 => 6))
-    compositemodel = Chain(firstlayer,pretrainedbackbone,lastlayers)
+    return Chain(firstlayer,pretrainedbackbone,lastlayers)
   else
     #TODO: Load from the latest model save-state in PROCESSING/camera/model_states/
   end
-  return compositemodel
 end
 
 function getnumberepochsperbatch(nepochs,epochchunksize)
@@ -107,7 +123,7 @@ function getnumberepochsperbatch(nepochs,epochchunksize)
   remainderepochs = nepochs - (epochchunksize*nchunks)
   historycsv = CSV.File("PROCESSING/camera/trainingepochsbybatch.csv")
   batches_old = historycsv.batch
-  epochs = copy(historycsv.epochs)
+  epochs = deepcopy(historycsv.epochs)
 
   minindex = sortperm(epochs)[1]
   batches    = [ batches_old[minindex] ]
@@ -134,6 +150,7 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
   batchestrained = Int32[]
   epochstrainedeach = Int32[]
   batches, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
+  println("Starting training")
   for (batchindex, batch) in enumerate(batches)
     push!(batchestrained,batch)
     push!(epochstrainedeach,0)
@@ -142,7 +159,7 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
       losses = Float32[]
       for (i, data) in enumerate(currentbatchtrainingdata)
         input, correctoutput = data
-
+        #TODO: Move this to the GPU
         val, grads = Flux.withgradient(model) do m
           result = m(input)
           lossfunc(result, correctoutput)
@@ -153,6 +170,7 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
           continue
         end
         Flux.update!(opt_state, model, grads[1])
+        println("Item $i trained.")
       end
       push!(loss_log, sum(losses))
       epochstrainedeach[end] = epochstrainedeach[end] + 1
@@ -160,6 +178,7 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
         println("stopping after $epoch epochs")
         break
       end
+      println("Epoch Complete")
     end
   end 
   #TODO: save model state in PROCESSING/camera/model_states/
