@@ -1,2 +1,5 @@
-epoch,trainloss,verifyloss
-0,1.0,1.0
+epoch,trainloss,verifyloss,modelstatenumber
+0,0.0,0.0,0
+100,1.48808e8,1.4470992e8,5
+200,2.205712384e10,2.2072471552e10,6
+300,1.48031968e8,1.44063216e8,7

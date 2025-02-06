@@ -1,7 +1,7 @@
 #-----ENVIRONMENT SETUP-------------------------------------------------------
 using Pkg
 Pkg.activate(@__DIR__) 
-required_packages = ["Metalhead", "Flux", "MLUtils", "Images", "CSV", "DataFrames", "CUDA", "cuDNN"]
+required_packages = ["Metalhead", "Flux", "MLUtils", "Images", "CSV", "DataFrames", "CUDA", "cuDNN", "JLD2"]
 function is_installed(pkg)
   return haskey(Pkg.project().dependencies, pkg)
 end
@@ -19,17 +19,17 @@ working_dir = dirname(dirname(@__DIR__))
 cd(working_dir)
 #-----END ENVIRONMENT SETUP---------------------------------------------------
 
-using Metalhead, Flux, MLUtils, Images, CSV, DataFrames, CUDA, cuDNN
+using Metalhead, Flux, MLUtils, Images, CSV, DataFrames, CUDA, cuDNN, JLD2
 CUDA.allowscalar(false)
 include(working_dir*"/LIB/imageprocessing.jl")
 previously_loaded = false
 
-function lpnormpoolinglayer(x)#TODO: causes issues with GPU
+function lpnormpoolinglayer(x)#causes issues with GPU
     return lpnormpool(x,Float32(0.5),(3,3)) ./ Float32(81)
 end
 
 function getfirstlayer()
-    return Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,MaxPool((3,3)),MeanPool((3,3)),MeanPool((3,3)))#,lpnormpoolinglayer)#TODO: actually use lpnorm
+    return Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,MaxPool((3,3)),MeanPool((3,3)),Conv((3,3), 1 => 1; stride = 3))
 end
 
 
@@ -58,6 +58,15 @@ function updatetrainingepochsbybatchcsv(batchestrained,epochstrainedeach)
   historycsv = CSV.File(csvname)
   for (i, batchnumber) in enumerate(batchestrained)
     historycsv.epochs[batchnumber] = historycsv.epochs[batchnumber] + epochstrainedeach[i]
+  end
+  CSV.write(csvname,DataFrame(historycsv))
+end
+
+function zerotrainingepochsbybatchcsv()
+  csvname ="PROCESSING/camera/trainingepochsbybatch.csv"
+  historycsv = CSV.File(csvname)
+  for i = 1:1:length(historycsv.epochs)
+    historycsv.epochs[i] = 0
   end
   CSV.write(csvname,DataFrame(historycsv))
 end
@@ -107,16 +116,38 @@ function gettrainingdatainbatches(;batchsize = 32, set = "train")#Batchsize MUST
   return gettrainingdatabatches(nbatches,batchsize,datacsv)
 end
 
+function findnewestmodelstatefilename()
+  save_state_filenames = readdir("PROCESSING/camera/model_states/")
+  save_state_numbers = zeros(Int64,length(save_state_filenames))
+  for i = 1:1:length(save_state_numbers)
+    save_state_numbers[i] = parse(Int64,save_state_filenames[i][1:end-5])
+  end
+  return save_state_filenames[findfirst(x->x == maximum(save_state_numbers),save_state_numbers)] 
+end
+
+function findnewestmodelstatenumber()
+  save_state_filenames = readdir("PROCESSING/camera/model_states/")
+  save_state_numbers = zeros(Int64,length(save_state_filenames))
+  for i = 1:1:length(save_state_numbers)
+    save_state_numbers[i] = parse(Int64,save_state_filenames[i][1:end-5])
+  end
+  return maximum(save_state_numbers)
+end
+
 function getmodel(;previously_loaded = false)
+  pretrainmodel = ResNet(18; pretrain = !previously_loaded)
+  pretrainedbackbone = pretrainmodel.layers[1]
+  firstlayer = getfirstlayer()
+  lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 100),Dense(100 => 6))
+  modelstructure = Chain(firstlayer,pretrainedbackbone,lastlayers)
   if previously_loaded == false
-    #TODO: if the code gets inside this if statement, trainingepochsbybatch.csv should be zeroed out
-    pretrainmodel = ResNet(18; pretrain = true)
-    pretrainedbackbone = pretrainmodel.layers[1]
-    firstlayer = getfirstlayer()
-    lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 100),Dense(100 => 6))
-    return Chain(firstlayer,pretrainedbackbone,lastlayers)
+    zerotrainingepochsbybatchcsv()
+    return modelstructure
   else
-    #TODO: Load from the latest model save-state in PROCESSING/camera/model_states/
+    newest = findnewestmodelstatefilename()
+    model_state = JLD2.load("PROCESSING/camera/model_states/"*newest, "model_state")
+    Flux.loadmodel!(modelstructure, model_state)
+    return modelstructure
   end
 end
 
@@ -142,182 +173,86 @@ function getnumberepochsperbatch(nepochs,epochchunksize)
   return batches, epochseach
 end
 
-function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
+function getmodelreadytotrain(resetmodel)
   model = cu(getmodel(;previously_loaded = !resetmodel))
-  trainingdata = gettrainingdatainbatches(; set = "train")#Vector{Vector{Tuple{AbstractMatrix, AbstractVector}}}
+  trainingdata = gettrainingdatainbatches(; set = "train")
+  verificationdata = gettrainingdatainbatches(; set = "verify")
   lossfunc = cu(getlossfunc())
   opt_state = Flux.setup(OptimiserChain(WeightDecay(0.42), Adam(0.1)), model)#includes regularization #Flux.setup(Adam(), model)
+  return model, trainingdata, verificationdata, lossfunc, opt_state
+end
 
-  loss_log = []
-  batchestrained = Int32[]
-  epochstrainedeach = Int32[]
-  batches, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
+function savemodelstate(model)
+  modelstatenumber = findnewestmodelstatenumber() + 1
+  filename = lpad(modelstatenumber,6,"0")*".jld2"
+  model_state = Flux.state(cpu(model))
+  jldsave("PROCESSING/camera/model_states/"*filename; model_state)
+  return modelstatenumber
+end
+
+function totaldatasetloss(model, lossfunc, trainingdata)
+  total = Float32(0.0)
+  model = cu(model)
+  for batchnumber = 1:1:length(trainingdata)
+    batch = trainingdata[batchnumber]
+    for itemnumber = 1:1:length(batch)
+      input, correctoutput = cu(batch[itemnumber])
+      total = total + lossfunc(model(input), correctoutput)
+    end
+  end
+  return total
+end
+
+function updatelossbyepochcsv(nepochs,model, trainingdata, verificationdata, lossfunc, modelstatenumber)
+  trainingloss = totaldatasetloss(model, lossfunc, trainingdata)
+  verificationloss = totaldatasetloss(model, lossfunc, verificationdata)
+  csv = CSV.File("PROCESSING/camera/lossbyepoch.csv")
+  lastepoch = csv.epoch[end]
+  push!(csv.epoch, lastepoch + nepochs)
+  push!(csv.trainloss,trainingloss)
+  push!(csv.verifyloss,verificationloss)
+  push!(csv.modelstatenumber,modelstatenumber)
+  CSV.write("PROCESSING/camera/lossbyepoch.csv",DataFrame(csv))
+end
+
+function trainbatch(currentbatchtrainingdata,lossfunc,model,opt_state)
+  losses = zeros(Float32,length(currentbatchtrainingdata))
+  for (i, data) in enumerate(currentbatchtrainingdata)
+    input, correctoutput = cu(data)
+    val, grads = Flux.withgradient(model) do m
+      result = m(input)
+      lossfunc(result, correctoutput)
+    end
+    losses[i] = val
+    Flux.update!(opt_state, model, grads[1])
+  end
+  return losses
+end
+
+function trainmodel(nepochs;resetmodel = false,epochchunksize = 10, seriesnumber = 1, nseries = 1)
+  model, trainingdata, verificationdata, lossfunc, opt_state = getmodelreadytotrain(resetmodel)
+  batchnumbers, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
   println("Starting training")
   epochcounter = 0
-  for (batchindex, batch) in enumerate(batches)
-    push!(batchestrained,batch)
-    push!(epochstrainedeach,0)
-    currentbatchtrainingdata = trainingdata[batch]
+  for (batchindex, batchnumber) in enumerate(batchnumbers)
+    currentbatchtrainingdata = trainingdata[batchnumber]
     for epoch in 1:epochseach[batchindex]
-      losses = Float32[]
-      for (i, data) in enumerate(currentbatchtrainingdata)
-        input, correctoutput = cu(data)
-        val, grads = Flux.withgradient(model) do m
-          result = m(input)
-          lossfunc(result, correctoutput)
-        end
-        
-        push!(losses, val)
-        if !isfinite(val)
-          @warn "loss is $val on item $i" epoch
-          continue
-        end
-        Flux.update!(opt_state, model, grads[1])
-        #println("Item $i trained.") #This line is more usefull with CPU training
-      end
-      push!(loss_log, sum(losses))
-      epochstrainedeach[end] = epochstrainedeach[end] + 1
-      if  sum(losses) < 1.0
-        println("stopping after $epoch epochs")
-        break
-      end
-      epochcounter++
-      println("Epoch $epochcounter / $nepochs Complete")
+      losses = trainbatch(currentbatchtrainingdata,lossfunc,model,opt_state)
+      epochcounter = epochcounter + 1
+      println("Epoch $epochcounter / $nepochs complete in series $seriesnumber / $nseries")
     end
-  end 
-  #TODO: save model state in PROCESSING/camera/model_states/
-  #TODO: record results in lossbyepoch.csv
-  updatetrainingepochsbybatchcsv(batchestrained,epochstrainedeach)
+  end
+  modelstatenumber = savemodelstate(model)
+  updatelossbyepochcsv(nepochs, model, trainingdata, verificationdata, lossfunc, modelstatenumber)
+  updatetrainingepochsbybatchcsv(batchnumbers, epochseach)
 end
 
-#TODO: where appropriate, freeze some layers of the model
-#TODO FIRST:do manual_data_entry until a good amount of training data is availible, then train the model.
-
-
-
-
-
-
-#=
-global model = compositemodel#getmodel()
-batchsize = 1
-data = [(rand(Float32, 672, 672, 1, batchsize), rand(Float32, 6, 1, 1, batchsize))
-        for _ in 1:3]
-opt = Optimisers.Adam()
-state = Optimisers.setup(opt, model);  # initialise this optimiser's state
-for (i, (image, y)) in enumerate(data)
-    @info "Starting batch $i ..."
-    gs, _ = Flux.gradient(model, image) do m, x  # calculate the gradients
-        logitcrossentropy(m(x), y)
-    end
-    state, global model = Optimisers.update(state, model, gs);
+function trainseries(nseries,nepochsperseries;resetmodel = false)
+  reset = deepcopy(resetmodel)
+  for i = 1:1:nseries
+    trainmodel(nepochsperseries;resetmodel = reset,epochchunksize = 10, seriesnumber = i, nseries = nseries)
+    reset = false
+  end
 end
-=#
 
-
-#=
-ResNet(
-  Chain(
-    Chain([
-      Conv((7, 7), 3 => 64, pad=3, stride=2, bias=false),  # 9_408 parameters
-      BatchNorm(64, relu),              # 128 parameters, plus 128
-      MaxPool((3, 3), pad=1, stride=2),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 64 => 64, pad=1, bias=false),  # 36_864 parameters
-          BatchNorm(64, relu),          # 128 parameters, plus 128
-          Conv((3, 3), 64 => 64, pad=1, bias=false),  # 36_864 parameters
-          BatchNorm(64),                # 128 parameters, plus 128
-        ),
-        identity,
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 64 => 64, pad=1, bias=false),  # 36_864 parameters
-          BatchNorm(64, relu),          # 128 parameters, plus 128
-          Conv((3, 3), 64 => 64, pad=1, bias=false),  # 36_864 parameters
-          BatchNorm(64),                # 128 parameters, plus 128
-        ),
-        identity,
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 64 => 128, pad=1, stride=2, bias=false),  # 73_728 parameters
-          BatchNorm(128, relu),         # 256 parameters, plus 256
-          Conv((3, 3), 128 => 128, pad=1, bias=false),  # 147_456 parameters
-          BatchNorm(128),               # 256 parameters, plus 256
-        ),
-        Chain([
-          Conv((1, 1), 64 => 128, stride=2, bias=false),  # 8_192 parameters
-          BatchNorm(128),               # 256 parameters, plus 256
-        ]),
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 128 => 128, pad=1, bias=false),  # 147_456 parameters
-          BatchNorm(128, relu),         # 256 parameters, plus 256
-          Conv((3, 3), 128 => 128, pad=1, bias=false),  # 147_456 parameters
-          BatchNorm(128),               # 256 parameters, plus 256
-        ),
-        identity,
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 128 => 256, pad=1, stride=2, bias=false),  # 294_912 parameters
-          BatchNorm(256, relu),         # 512 parameters, plus 512
-          Conv((3, 3), 256 => 256, pad=1, bias=false),  # 589_824 parameters
-          BatchNorm(256),               # 512 parameters, plus 512
-        ),
-        Chain([
-          Conv((1, 1), 128 => 256, stride=2, bias=false),  # 32_768 parameters
-          BatchNorm(256),               # 512 parameters, plus 512
-        ]),
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 256 => 256, pad=1, bias=false),  # 589_824 parameters
-          BatchNorm(256, relu),         # 512 parameters, plus 512
-          Conv((3, 3), 256 => 256, pad=1, bias=false),  # 589_824 parameters
-          BatchNorm(256),               # 512 parameters, plus 512
-        ),
-        identity,
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 256 => 512, pad=1, stride=2, bias=false),  # 1_179_648 parameters
-          BatchNorm(512, relu),         # 1_024 parameters, plus 1_024
-          Conv((3, 3), 512 => 512, pad=1, bias=false),  # 2_359_296 parameters
-          BatchNorm(512),               # 1_024 parameters, plus 1_024
-        ),
-        Chain([
-          Conv((1, 1), 256 => 512, stride=2, bias=false),  # 131_072 parameters
-          BatchNorm(512),               # 1_024 parameters, plus 1_024
-        ]),
-      ),
-      Parallel(
-        Metalhead.addrelu,
-        Chain(
-          Conv((3, 3), 512 => 512, pad=1, bias=false),  # 2_359_296 parameters
-          BatchNorm(512, relu),         # 1_024 parameters, plus 1_024
-          Conv((3, 3), 512 => 512, pad=1, bias=false),  # 2_359_296 parameters
-          BatchNorm(512),               # 1_024 parameters, plus 1_024
-        ),
-        identity,
-      ),
-    ]),
-    Chain(
-      AdaptiveMeanPool((1, 1)),
-      MLUtils.flatten,
-      Dense(512 => 1000),               # 513_000 parameters
-    ),
-  ),
-)         # Total: 62 trainable arrays, 11_689_512 parameters,
-          # plus 40 non-trainable, 9_600 parameters, summarysize 44.642 MiB.
-          =#
+#TODO: consider using the 3rd and fourth dimensions of a fourdimage to indicate the item and batch number. this may make GPU training faster, but several functions must be rewriten
