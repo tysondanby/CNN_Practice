@@ -1,7 +1,7 @@
 #-----ENVIRONMENT SETUP-------------------------------------------------------
 using Pkg
 Pkg.activate(@__DIR__) 
-required_packages = ["Metalhead", "Flux", "MLUtils", "Images", "CSV", "DataFrames"]
+required_packages = ["Metalhead", "Flux", "MLUtils", "Images", "CSV", "DataFrames", "CUDA", "cuDNN"]
 function is_installed(pkg)
   return haskey(Pkg.project().dependencies, pkg)
 end
@@ -19,16 +19,17 @@ working_dir = dirname(dirname(@__DIR__))
 cd(working_dir)
 #-----END ENVIRONMENT SETUP---------------------------------------------------
 
-using Metalhead, Flux, MLUtils, Images, CSV, DataFrames
+using Metalhead, Flux, MLUtils, Images, CSV, DataFrames, CUDA, cuDNN
+CUDA.allowscalar(false)
 include(working_dir*"/LIB/imageprocessing.jl")
 previously_loaded = false
 
-function lpnormpoolinglayer(x)
+function lpnormpoolinglayer(x)#TODO: causes issues with GPU
     return lpnormpool(x,Float32(0.5),(3,3)) ./ Float32(81)
 end
 
 function getfirstlayer()
-    return Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,MaxPool((3,3)),MeanPool((3,3)),lpnormpoolinglayer)
+    return Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,MaxPool((3,3)),MeanPool((3,3)),MeanPool((3,3)))#,lpnormpoolinglayer)#TODO: actually use lpnorm
 end
 
 
@@ -108,6 +109,7 @@ end
 
 function getmodel(;previously_loaded = false)
   if previously_loaded == false
+    #TODO: if the code gets inside this if statement, trainingepochsbybatch.csv should be zeroed out
     pretrainmodel = ResNet(18; pretrain = true)
     pretrainedbackbone = pretrainmodel.layers[1]
     firstlayer = getfirstlayer()
@@ -141,9 +143,9 @@ function getnumberepochsperbatch(nepochs,epochchunksize)
 end
 
 function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
-  model = getmodel(;previously_loaded = !resetmodel)
+  model = cu(getmodel(;previously_loaded = !resetmodel))
   trainingdata = gettrainingdatainbatches(; set = "train")#Vector{Vector{Tuple{AbstractMatrix, AbstractVector}}}
-  lossfunc = getlossfunc()
+  lossfunc = cu(getlossfunc())
   opt_state = Flux.setup(OptimiserChain(WeightDecay(0.42), Adam(0.1)), model)#includes regularization #Flux.setup(Adam(), model)
 
   loss_log = []
@@ -151,6 +153,7 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
   epochstrainedeach = Int32[]
   batches, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
   println("Starting training")
+  epochcounter = 0
   for (batchindex, batch) in enumerate(batches)
     push!(batchestrained,batch)
     push!(epochstrainedeach,0)
@@ -158,19 +161,19 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
     for epoch in 1:epochseach[batchindex]
       losses = Float32[]
       for (i, data) in enumerate(currentbatchtrainingdata)
-        input, correctoutput = data
-        #TODO: Move this to the GPU
+        input, correctoutput = cu(data)
         val, grads = Flux.withgradient(model) do m
           result = m(input)
           lossfunc(result, correctoutput)
         end
+        
         push!(losses, val)
         if !isfinite(val)
           @warn "loss is $val on item $i" epoch
           continue
         end
         Flux.update!(opt_state, model, grads[1])
-        println("Item $i trained.")
+        #println("Item $i trained.") #This line is more usefull with CPU training
       end
       push!(loss_log, sum(losses))
       epochstrainedeach[end] = epochstrainedeach[end] + 1
@@ -178,7 +181,8 @@ function trainmodel(nepochs;resetmodel = false,epochchunksize = 10)
         println("stopping after $epoch epochs")
         break
       end
-      println("Epoch Complete")
+      epochcounter++
+      println("Epoch $epochcounter / $nepochs Complete")
     end
   end 
   #TODO: save model state in PROCESSING/camera/model_states/
