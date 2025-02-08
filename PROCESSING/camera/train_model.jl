@@ -72,44 +72,55 @@ function zerotrainingepochsbybatchcsv()
 end
 
 function gettrainingdatabatch(batchsize,batchnumber,datacsv)
-  batch = Tuple{Array{Float32, 4}, Vector{Float32}}[]
+  inputdatabatch = zeros(Float32,672,672,batchsize)
+  outputdatabatch = zeros(Float32,6,batchsize)
   for imagenumber = 1:1:(batchsize/8)
     datacsvindex = Int32(1+imagenumber + (batchsize/8)*(batchnumber-1))
     imgname = datacsv.filename[datacsvindex]
     img = Float32.(Images.load("DATA/camera/prepared/"*imgname))
     fourdimensionalimage = zeros(Float32,size(img)...,1,1)
     fourdimensionalimage[:,:,1,1] = img
-    answer = Float32.([datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],datacsv.x3[datacsvindex],datacsv.y3[datacsvindex]])
+    answer = zeros(Float32,6,1)
+    answer[:,1] = Float32.([datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],datacsv.x3[datacsvindex],datacsv.y3[datacsvindex]])
     #do 8 transformed copies:
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#0deg
+    inputdatabatch[:,:,Int32(imagenumber*8-7)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-7)] = deepcopy(answer)#0deg
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#90deg
+    inputdatabatch[:,:,Int32(imagenumber*8-6)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-6)] = deepcopy(answer)#90deg
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#180deg
+    inputdatabatch[:,:,Int32(imagenumber*8-5)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-5)] = deepcopy(answer)#180deg
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#270deg
+    inputdatabatch[:,:,Int32(imagenumber*8-4)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-4)] = deepcopy(answer)#270deg
     rotate4dimage90!(fourdimensionalimage,answer)
     flip4dimageX!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#0deg-flipped
+    inputdatabatch[:,:,Int32(imagenumber*8-3)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-3)] = deepcopy(answer)#0deg-flipped
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#90deg-flipped
+    inputdatabatch[:,:,Int32(imagenumber*8-2)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-2)] = deepcopy(answer)#90deg-flipped
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#180deg-flipped
+    inputdatabatch[:,:,Int32(imagenumber*8-1)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8-1)] = deepcopy(answer)#180deg-flipped
     rotate4dimage90!(fourdimensionalimage,answer)
-    push!(batch,deepcopy((fourdimensionalimage,answer)))#270deg-flipped
+    inputdatabatch[:,:,Int32(imagenumber*8)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*8)] = deepcopy(answer)#270deg-flipped
   end
-  return batch
+  return inputdatabatch, outputdatabatch
 end
 
 function gettrainingdatabatches(nbatches,batchsize,datacsv)
-  batches = Vector{Tuple{Array{Float32, 4}, Vector{Float32}}}[]
+  inputdata = zeros(Float32,672,672,nbatches,batchsize)
+  outputdata = zeros(Float32,6,batchsize,nbatches)
   for batchnumber = 1:1:nbatches
-    push!(batches,gettrainingdatabatch(batchsize,batchnumber,datacsv))
+    inputdata[:,:,batchnumber,:], outputdata[:,:,batchnumber] = gettrainingdatabatch(batchsize,batchnumber,datacsv)
   end
-  return batches
+  return inputdata, outputdata
 end
 
-function gettrainingdatainbatches(;batchsize = 32, set = "train")#Batchsize MUST be divisible by 8
+function gettrainingdatainbatches(;batchsize = 16, set = "train")#Batchsize MUST be divisible by 8
   datacsv = CSV.File("DATA/camera/model_data/"*set*".csv")
   nbatches = Int32(floor((length(datacsv.filename)-1)*8/batchsize))
   updatetrainingepochsbybatchcsv(nbatches)
@@ -138,10 +149,30 @@ function getmodel(;previously_loaded = false)
   pretrainmodel = ResNet(18; pretrain = !previously_loaded)
   pretrainedbackbone = pretrainmodel.layers[1]
   firstlayer = getfirstlayer()
-  lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 100),Dense(100 => 6))
+  lastlayers = Chain(AdaptiveMeanPool((1, 1)),MLUtils.flatten,Dense(512 => 50),Dense(50 => 6))
   modelstructure = Chain(firstlayer,pretrainedbackbone,lastlayers)
   if previously_loaded == false
     zerotrainingepochsbybatchcsv()
+    return modelstructure
+  else
+    newest = findnewestmodelstatefilename()
+    model_state = JLD2.load("PROCESSING/camera/model_states/"*newest, "model_state")
+    Flux.loadmodel!(modelstructure, model_state)
+    return modelstructure
+  end
+end
+
+function getsimplemodel(;previously_loaded = false)
+  modelstructure = Chain(
+                          Conv((3,3),1 => 4;stride = 3),
+                          Conv((5,5),4 => 16;stride = 4,pad = SamePad()),
+                          Conv((7,7),16 => 64;stride = 4,pad = SamePad()),
+                          AdaptiveMeanPool((1, 1)),MLUtils.flatten,
+                          Dense(64 => 20),
+                          Dense(20 => 6)
+                          )
+  if previously_loaded == false
+    #zerotrainingepochsbybatchcsv()
     return modelstructure
   else
     newest = findnewestmodelstatefilename()
@@ -174,12 +205,12 @@ function getnumberepochsperbatch(nepochs,epochchunksize)
 end
 
 function getmodelreadytotrain(resetmodel)
-  model = cu(getmodel(;previously_loaded = !resetmodel))
-  trainingdata = gettrainingdatainbatches(; set = "train")
-  verificationdata = gettrainingdatainbatches(; set = "verify")
-  lossfunc = cu(getlossfunc())
-  opt_state = Flux.setup(OptimiserChain(WeightDecay(0.42), Adam(0.1)), model)#includes regularization #Flux.setup(Adam(), model)
-  return model, trainingdata, verificationdata, lossfunc, opt_state
+  model = getsimplemodel(;previously_loaded = !resetmodel)#TODO
+  trainingdatainput, trainingdataoutput = gettrainingdatainbatches(; set = "train")
+  verificationdatainput, verificationdataoutput = gettrainingdatainbatches(; set = "verify")
+  lossfunc = getlossfunc()
+  #includes regularization #Flux.setup(Adam(), model)
+  return model, trainingdatainput, trainingdataoutput, verificationdatainput, verificationdataoutput, lossfunc
 end
 
 function savemodelstate(model)
@@ -190,22 +221,23 @@ function savemodelstate(model)
   return modelstatenumber
 end
 
-function totaldatasetloss(model, lossfunc, trainingdata)
-  total = Float32(0.0)
-  model = cu(model)
-  for batchnumber = 1:1:length(trainingdata)
-    batch = trainingdata[batchnumber]
-    for itemnumber = 1:1:length(batch)
-      input, correctoutput = cu(batch[itemnumber])
-      total = total + lossfunc(model(input), correctoutput)
-    end
+function totaldatasetloss(model, lossfunc, trainingdatainput, trainingdataoutput)
+  total = Float32(0.0)#TODO: check if model is on GPU
+  for batchnumber = 1:1:size(trainingdatainput)[4]
+    currentbatchtrainingdataoutput = cu(trainingdataoutput[:,:,batchnumber])
+    currentbatchtrainingdatainput = cu(trainingdatainput[:,:,batchnumber:batchnumber,:])
+    #for itemnumber = 1:1:size(trainingdatainput)[3]
+    total = total + lossfunc(model(currentbatchtrainingdatainput), currentbatchtrainingdataoutput)
+    #end
+    #CUDA.unsafe_free!(currentbatchtrainingdataoutput)
+    #CUDA.unsafe_free!(currentbatchtrainingdatainput)
   end
-  return total
+  return total / (size(trainingdataoutput)[2]*size(trainingdataoutput)[3])
 end
 
-function updatelossbyepochcsv(nepochs,model, trainingdata, verificationdata, lossfunc, modelstatenumber)
-  trainingloss = totaldatasetloss(model, lossfunc, trainingdata)
-  verificationloss = totaldatasetloss(model, lossfunc, verificationdata)
+function updatelossbyepochcsv(nepochs, model, trainingdatainput, trainingdataoutput, verificationdatainput, verificationdataoutput, lossfunc, modelstatenumber)
+  trainingloss = totaldatasetloss(model, lossfunc, trainingdatainput, trainingdataoutput)
+  verificationloss = totaldatasetloss(model, lossfunc, verificationdatainput, verificationdataoutput)
   csv = CSV.File("PROCESSING/camera/lossbyepoch.csv")
   lastepoch = csv.epoch[end]
   push!(csv.epoch, lastepoch + nepochs)
@@ -215,44 +247,68 @@ function updatelossbyepochcsv(nepochs,model, trainingdata, verificationdata, los
   CSV.write("PROCESSING/camera/lossbyepoch.csv",DataFrame(csv))
 end
 
-function trainbatch(currentbatchtrainingdata,lossfunc,model,opt_state)
-  losses = zeros(Float32,length(currentbatchtrainingdata))
-  for (i, data) in enumerate(currentbatchtrainingdata)
-    input, correctoutput = cu(data)
-    val, grads = Flux.withgradient(model) do m
-      result = m(input)
-      lossfunc(result, correctoutput)
+function trainbatch(currentbatchtrainingdatainput,currentbatchtrainingdataoutput,lossfunc,model,opt_state)
+  #for i = 1:1:size(currentbatchtrainingdatainput)[3]
+    ##=
+    grads = Flux.gradient(model) do m
+      #result = m(currentbatchtrainingdatainput[:,:,i:i,:])
+      lossfunc(m(currentbatchtrainingdatainput[:,:,:,:]), currentbatchtrainingdataoutput[:,:])#x,y,1(was batchnumber),itemnumber     out,itemnumber,  wasbatchnumber
     end
-    losses[i] = val
     Flux.update!(opt_state, model, grads[1])
-  end
-  return losses
+    # =#
+ # end
 end
 
-function trainmodel(nepochs;resetmodel = false,epochchunksize = 10, seriesnumber = 1, nseries = 1)
-  model, trainingdata, verificationdata, lossfunc, opt_state = getmodelreadytotrain(resetmodel)
-  batchnumbers, epochseach = getnumberepochsperbatch(nepochs,epochchunksize)
-  println("Starting training")
-  epochcounter = 0
-  for (batchindex, batchnumber) in enumerate(batchnumbers)
-    currentbatchtrainingdata = trainingdata[batchnumber]
-    for epoch in 1:epochseach[batchindex]
-      losses = trainbatch(currentbatchtrainingdata,lossfunc,model,opt_state)
-      epochcounter = epochcounter + 1
-      println("Epoch $epochcounter / $nepochs complete in series $seriesnumber / $nseries")
-    end
+function batchgrads(currentbatchtrainingdatainput,currentbatchtrainingdataoutput,lossfunc,model)
+  grads = Flux.gradient(model) do m
+    #result = m(currentbatchtrainingdatainput[:,:,i:i,:])
+    lossfunc(m(currentbatchtrainingdatainput[:,:,:,:]), currentbatchtrainingdataoutput[:,:])#x,y,1(was batchnumber),itemnumber     out,itemnumber,  wasbatchnumber
   end
-  modelstatenumber = savemodelstate(model)
-  updatelossbyepochcsv(nepochs, model, trainingdata, verificationdata, lossfunc, modelstatenumber)
-  updatetrainingepochsbybatchcsv(batchnumbers, epochseach)
+  return grads
 end
 
-function trainseries(nseries,nepochsperseries;resetmodel = false)
+function trainmodel(nseries,nepochs;resetmodel = false,epochchunksize = 1)
+  CUDA.reclaim()
   reset = deepcopy(resetmodel)
+  model, trainingdatainput, trainingdataoutput, verificationdatainput, verificationdataoutput, lossfunc = getmodelreadytotrain(resetmodel)
+  nbatches = size(trainingdatainput)[3]
+  nbatchestrainedperseries = nbatches * nepochs
+  #batchnumbers, epochseach = getnumberepochsperbatch(nbatchestrainedperseries,epochchunksize)
+  c_model = cu(model)
+  c_lossfunc = cu(lossfunc) #                       1e-4            1.0        0.001
+  opt_state = Flux.setup(OptimiserChain(WeightDecay(1e-4), ClipNorm(1.0), Adam(0.001)), c_model)
+  println("Starting training")
+  totalepochcounter = 0
   for i = 1:1:nseries
-    trainmodel(nepochsperseries;resetmodel = reset,epochchunksize = 10, seriesnumber = i, nseries = nseries)
+    CUDA.reclaim()
+    epochcounter = 0
+    for j = 1:1:nepochs
+      accum_grads = nothing #TODO: may be a better way of initializing this that doesn't necesitate if statement
+      re = nothing
+      for batchnumber = 1:1:nbatches
+        currentbatchtrainingdataoutput = cu(trainingdataoutput[:,:,batchnumber])
+        currentbatchtrainingdatainput = cu(trainingdatainput[:,:,batchnumber:batchnumber,:])
+        grads = batchgrads(currentbatchtrainingdatainput,currentbatchtrainingdataoutput,c_lossfunc,c_model)
+        flat_grads, re = Flux.destructure(grads)
+        if accum_grads == nothing
+          accum_grads = flat_grads
+        else
+          accum_grads .+= flat_grads
+        end
+      end
+      Flux.update!(opt_state, c_model, re(accum_grads)[1])
+      epochcounter = epochcounter + 1
+      totalepochcounter = totalepochcounter + 1
+      println("Completed $epochcounter / $nepochs epochs in series $i / $nseries. ( $totalepochcounter / $(nseries*nepochs) )")
+    end
+    modelstatenumber = savemodelstate(c_model)
+    updatelossbyepochcsv(Int32(floor(nbatchestrainedperseries/nbatches)), c_model, trainingdatainput, trainingdataoutput, verificationdatainput, verificationdataoutput, c_lossfunc, modelstatenumber)
+    #updatetrainingepochsbybatchcsv(batchnumbers, epochseach)
+    #model = cpu(c_model)
+    #c_model = nothing
+    #opt_state = nothing
+    GC.gc()
+    #CUDA.reclaim()
     reset = false
   end
 end
-
-#TODO: consider using the 3rd and fourth dimensions of a fourdimage to indicate the item and batch number. this may make GPU training faster, but several functions must be rewriten
