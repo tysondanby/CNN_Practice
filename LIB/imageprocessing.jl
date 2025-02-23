@@ -341,7 +341,7 @@ function filterfartherthan!(img,imgfilter,distance)
     end
 end
 
-function rotate4dimage90!(fourdimensionalimage,answer)
+function rotate4dimage90!(fourdimensionalimage,answer,n)
     resolution = size(fourdimensionalimage)[1:2]
     referanceimage =  deepcopy(fourdimensionalimage)
     for i = 1:1:resolution[1]
@@ -349,6 +349,23 @@ function rotate4dimage90!(fourdimensionalimage,answer)
             fourdimensionalimage[resolution[1]+1-j,i,1,1] = referanceimage[i,j,1,1]
         end
     end
+    answer[1] = typeof(answer[1])(673 - answer[2])
+    answer[2] = answer[1]
+    θ = atand(answer[4],answer[5])/ n
+    θ -= 90.0
+    upperbound = 180.0
+    if n == 3
+        upperbound = 120.0
+    end
+    while !(0<θ<upperbound)
+        θ += upperbound
+        if θ >=360.0
+            θ -= 360.0
+        end
+    end
+    answer[4] = sind(θ*n)
+    answer[5] = cosd(θ*n)
+    #=
     for i = 1:1:(length(answer)/2)
         indexx = Int32(2*i-1)
         indexy = Int32(2*i)
@@ -358,7 +375,7 @@ function rotate4dimage90!(fourdimensionalimage,answer)
             answer[indexx] = typeof(answer[1])(673 - refy)
             answer[indexy] = refx
         end
-    end
+    end =#
 end
 
 function flip4dimageX!(fourdimensionalimage,answer)
@@ -367,11 +384,22 @@ function flip4dimageX!(fourdimensionalimage,answer)
     for i = 1:1:resolution[1]
         fourdimensionalimage[673-i,:,1,1] = referanceimage[i,:,1,1]
     end
-    for i = 1:1:(length(answer)/2)
-        indexx = Int32(2*i-1)
-        indexy = Int32(2*i)
-        if (answer[indexx] >= 1) && (answer[indexy] >= 1)
-            answer[indexx] = typeof(answer[1])(673 - answer[indexx])
-        end
+    answer[1] = typeof(answer[1])(673 - answer[1])
+    answer[5] = -answer[5]
+end
+
+function flip4dimageX!(fourdimensionalimage)
+    resolution = size(fourdimensionalimage)[1:2]
+    referanceimage =  deepcopy(fourdimensionalimage)
+    for i = 1:1:resolution[1]
+        fourdimensionalimage[673-i,:,1,1] = referanceimage[i,:,1,1]
+    end
+end
+
+function flipimageX!(image)
+    resolution = size(image)
+    referanceimage =  deepcopy(image)
+    for i = 1:1:resolution[1]
+        image[673-i,:] = referanceimage[i,:]
     end
 end

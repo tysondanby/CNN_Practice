@@ -22,6 +22,7 @@ cd(working_dir)
 using Metalhead, Flux, MLUtils, Images, CSV, DataFrames, CUDA, cuDNN, JLD2
 CUDA.allowscalar(false)
 include(working_dir*"/LIB/imageprocessing.jl")
+include(working_dir*"/LIB/math.jl")
 
 function to_cuda(x)
   if x isa Array
@@ -35,8 +36,15 @@ function to_cuda(x)
   end
 end
 
-function lossfunction(yhat,y)
+function lossfunctionold(yhat,y)
   return sum((yhat .- y).^2)
+end
+
+function lossfunction(yhat,y)
+  centerdistsquared = (yhat[1,:] .- y[1,:]).^2 + (yhat[2,:] .- y[2,:]).^2
+  radiussquared = ((yhat[3,:] .- y[3,:]).*10).^2
+  phase = ((yhat[4,:] .- y[4,:]).*300).^2 .+ ((yhat[5,:] .- y[5,:]).*300).^2
+  return sum(centerdistsquared .+ radiussquared.*Float32(0.02) .+ phase)
 end
 
 function getnewestmodelstate()
@@ -49,7 +57,7 @@ function getnewestmodelstate()
 end
 
 
-function getmodel(;previously_loaded = false)
+function getmodel(weightdecay,clipnorm,learningrate;previously_loaded = false)
   pretrainmodel = ResNet(18; pretrain = !previously_loaded)
   pretrainedbackbone = pretrainmodel.layers[1]
   firstlayer = Parallel(function f(a,b,c) return cat(a,b,c;dims=(3)) end,
@@ -59,26 +67,27 @@ function getmodel(;previously_loaded = false)
   lastlayers = Chain(AdaptiveMeanPool((1, 1)),
                     MLUtils.flatten,
                     Dense(512 => 50),
-                    Dense(50 => 6))
-  modelstructure = Chain(firstlayer,pretrainedbackbone,lastlayers)
+                    Dense(50 => 5))
+  modelstructure = cu(Chain(firstlayer,pretrainedbackbone,lastlayers))
+  c_opt_state = Flux.setup(OptimiserChain(WeightDecay(weightdecay), ClipNorm(clipnorm), Adam(learningrate)),modelstructure)
   if previously_loaded == false
-    return modelstructure
+    return modelstructure, c_opt_state
   else
     newest, ~ = getnewestmodelstate()
     model_state = JLD2.load("PROCESSING/camera/model_states/"*newest, "model_state")
     Flux.loadmodel!(modelstructure, model_state)
-    return modelstructure
+    return modelstructure, c_opt_state
   end
 end
 
 function getsimplemodel(weightdecay,clipnorm,learningrate;previously_loaded = false)
   modelstructure = Chain(
                           Conv((3,3),1 => 4;stride = 3), 
-                          Conv((5,5),4 => 16;stride = 4,pad = SamePad()), Dropout(0.1; rng = CUDA.RNG()),
-                          Conv((7,7),16 => 64;stride = 4,pad = SamePad()), Dropout(0.05; rng = CUDA.RNG()),
+                          Conv((5,5),4 => 16;stride = 4,pad = SamePad()),#, Dropout(0.1; rng = CUDA.RNG()),
+                          Conv((7,7),16 => 64;stride = 4,pad = SamePad()),#, Dropout(0.05; rng = CUDA.RNG()),
                           AdaptiveMeanPool((1, 1)),MLUtils.flatten,
-                          Dense(64 => 20), Dropout(0.02; rng = CUDA.RNG()),
-                          Dense(20 => 6)
+                          Dense(64 => 20),#, Dropout(0.02; rng = CUDA.RNG()),
+                          Dense(20 => 5)
                           )
   c_modelstructure = cu(modelstructure)
   c_opt_state = Flux.setup(OptimiserChain(WeightDecay(weightdecay), ClipNorm(clipnorm), Adam(learningrate)),c_modelstructure)
@@ -94,49 +103,81 @@ function getsimplemodel(weightdecay,clipnorm,learningrate;previously_loaded = fa
   end
 end
 
+function getpropellerfromimagename(imagename)
+  firstunderscore = findfirst(x -> x == '_', imagename)
+  secondunderscore = findfirst(x -> x == '_', imagename[firstunderscore+1:end]) + firstunderscore
+  return parse(Int32,imagename[firstunderscore+1:secondunderscore-1])
+end
+
 function gettrainingdatabatch(batchsize,batchnumber,datacsv)
   inputdatabatch = zeros(Float32,672,672,batchsize)
-  outputdatabatch = zeros(Float32,6,batchsize)
-  for imagenumber = 1:1:(batchsize/8)
-    datacsvindex = Int32(1+imagenumber + (batchsize/8)*(batchnumber-1))
+  outputdatabatch = zeros(Float32,5,batchsize)
+  for imagenumber = 1:1:(batchsize/4)
+    datacsvindex = Int32(1+imagenumber + (batchsize/4)*(batchnumber-1))
     imgname = datacsv.filename[datacsvindex]
     img = Float32.(Images.load("DATA/camera/prepared/"*imgname))
     fourdimensionalimage = zeros(Float32,size(img)...,1,1)
     fourdimensionalimage[:,:,1,1] = img
-    answer = zeros(Float32,6,1)
-    answer[:,1] = Float32.([datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],datacsv.x3[datacsvindex],datacsv.y3[datacsvindex]])
-    #do 8 transformed copies:
-    inputdatabatch[:,:,Int32(imagenumber*8-7)] = deepcopy(fourdimensionalimage[:,:,1,1])
-    outputdatabatch[:,Int32(imagenumber*8-7)] = deepcopy(answer)#0deg
-    rotate4dimage90!(fourdimensionalimage,answer)
-    inputdatabatch[:,:,Int32(imagenumber*8-6)] = deepcopy(fourdimensionalimage[:,:,1,1])
-    outputdatabatch[:,Int32(imagenumber*8-6)] = deepcopy(answer)#90deg
-    rotate4dimage90!(fourdimensionalimage,answer)
-    inputdatabatch[:,:,Int32(imagenumber*8-5)] = deepcopy(fourdimensionalimage[:,:,1,1])
-    outputdatabatch[:,Int32(imagenumber*8-5)] = deepcopy(answer)#180deg
-    rotate4dimage90!(fourdimensionalimage,answer)
-    inputdatabatch[:,:,Int32(imagenumber*8-4)] = deepcopy(fourdimensionalimage[:,:,1,1])
-    outputdatabatch[:,Int32(imagenumber*8-4)] = deepcopy(answer)#270deg
-    rotate4dimage90!(fourdimensionalimage,answer)
+    answer = zeros(Float32,5,1)
+    xc = nothing
+    yc = nothing
+    r = nothing
+    nθ = nothing
+    n = nothing
+    if (datacsv.x1[datacsvindex] > 1.0) || (datacsv.y1[datacsvindex] > 1.0)
+      xc = ( datacsv.x1[datacsvindex] + datacsv.x2[datacsvindex] + datacsv.x3[datacsvindex] ) / Float32(3.0)
+      yc = ( datacsv.y1[datacsvindex] + datacsv.y2[datacsvindex] + datacsv.y3[datacsvindex] ) / Float32(3.0)
+      r = ( distance(datacsv.x1[datacsvindex],datacsv.y1[datacsvindex],xc,yc) + distance(datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],xc,yc) + distance(datacsv.x3[datacsvindex],datacsv.y3[datacsvindex],xc,yc)) / Float32(3.0)
+      gamma = atand(datacsv.y1[datacsvindex]-yc,datacsv.x1[datacsvindex]-xc)
+      nθ = (gamma - Float32(30.0))*Float32(3.0)
+      n = 3
+    else
+      xc = (datacsv.x2[datacsvindex] + datacsv.x3[datacsvindex] ) / Float32(2.0)
+      yc = (datacsv.y2[datacsvindex] + datacsv.y3[datacsvindex] ) / Float32(2.0)
+      r = ( distance(datacsv.x2[datacsvindex],datacsv.y2[datacsvindex],xc,yc) + distance(datacsv.x3[datacsvindex],datacsv.y3[datacsvindex],xc,yc)) / Float32(2.0)
+      gamma = atand(datacsv.y1[datacsvindex]-yc,datacsv.x1[datacsvindex]-xc)
+      nθ = gamma*Float32(2.0)
+      n = 2
+    end
+    answer[:,1] = Float32.([xc,yc,r,sind(nθ),cosd(nθ)])
+    propnumber = getpropellerfromimagename(imgname)
+    if (propnumber == 1) || (propnumber == 5)
+      flip4dimageX!(fourdimensionalimage,answer)
+    end
+    #do 4 transformed copies:
+    inputdatabatch[:,:,Int32(imagenumber*4-3)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*4-3)] = deepcopy(answer)#0deg
+    rotate4dimage90!(fourdimensionalimage,answer,n)
+    inputdatabatch[:,:,Int32(imagenumber*4-2)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*4-2)] = deepcopy(answer)#90deg
+    rotate4dimage90!(fourdimensionalimage,answer,n)
+    inputdatabatch[:,:,Int32(imagenumber*4-1)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*4-1)] = deepcopy(answer)#180deg
+    rotate4dimage90!(fourdimensionalimage,answer,n)
+    inputdatabatch[:,:,Int32(imagenumber*4)] = deepcopy(fourdimensionalimage[:,:,1,1])
+    outputdatabatch[:,Int32(imagenumber*4)] = deepcopy(answer)#270deg
+    #rotate4dimage90!(fourdimensionalimage,answer,n)
+    #=
     flip4dimageX!(fourdimensionalimage,answer)
     inputdatabatch[:,:,Int32(imagenumber*8-3)] = deepcopy(fourdimensionalimage[:,:,1,1])
     outputdatabatch[:,Int32(imagenumber*8-3)] = deepcopy(answer)#0deg-flipped
-    rotate4dimage90!(fourdimensionalimage,answer)
+    rotate4dimage90!(fourdimensionalimage,answer,n)
     inputdatabatch[:,:,Int32(imagenumber*8-2)] = deepcopy(fourdimensionalimage[:,:,1,1])
     outputdatabatch[:,Int32(imagenumber*8-2)] = deepcopy(answer)#90deg-flipped
-    rotate4dimage90!(fourdimensionalimage,answer)
+    rotate4dimage90!(fourdimensionalimage,answer,n)
     inputdatabatch[:,:,Int32(imagenumber*8-1)] = deepcopy(fourdimensionalimage[:,:,1,1])
     outputdatabatch[:,Int32(imagenumber*8-1)] = deepcopy(answer)#180deg-flipped
-    rotate4dimage90!(fourdimensionalimage,answer)
+    rotate4dimage90!(fourdimensionalimage,answer,n)
     inputdatabatch[:,:,Int32(imagenumber*8)] = deepcopy(fourdimensionalimage[:,:,1,1])
     outputdatabatch[:,Int32(imagenumber*8)] = deepcopy(answer)#270deg-flipped
+    =#
   end
   return inputdatabatch, outputdatabatch
 end
 
 function gettrainingdatabatches(nbatches,batchsize,datacsv)
   inputdata = zeros(Float32,672,672,nbatches,batchsize)
-  outputdata = zeros(Float32,6,batchsize,nbatches)
+  outputdata = zeros(Float32,5,batchsize,nbatches)
   for batchnumber = 1:1:nbatches
     inputdata[:,:,batchnumber,:], outputdata[:,:,batchnumber] = gettrainingdatabatch(batchsize,batchnumber,datacsv)
   end
@@ -145,13 +186,13 @@ end
 
 function gettrainingdatainbatches(;batchsize = 16, set = "train")#Batchsize MUST be divisible by 8
   datacsv = CSV.File("DATA/camera/model_data/"*set*".csv")
-  nbatches = Int32(floor((length(datacsv.filename)-1)*8/batchsize))
+  nbatches = Int32(floor((length(datacsv.filename)-1)*4/batchsize))
   return gettrainingdatabatches(nbatches,batchsize,datacsv)
 end
 
 function modelanddatatoRAM(resetmodel,weightdecay,clipnorm,learningrate; batchsize = 32)
   println("Moving objects to memory - Model (0/3)")
-  model,opt_state = getsimplemodel(weightdecay,clipnorm,learningrate;previously_loaded = !resetmodel)
+  model,opt_state = getmodel(weightdecay,clipnorm,learningrate;previously_loaded = !resetmodel)
   println("Moving objects to memory - Training Data (1/3)")
   trainingdatainput, trainingdataoutput = gettrainingdatainbatches(; set = "train", batchsize = batchsize)
   println("Moving objects to memory - Verification Data (2/3)")
