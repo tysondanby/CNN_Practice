@@ -35,7 +35,7 @@ end
 function getpropellerspeedimagenumberfromimagename(imagename)
     firstunderscore = findfirst(x -> x == '_', imagename)
     secondunderscore = findfirst(x -> x == '_', imagename[firstunderscore+1:end]) + firstunderscore
-    thirdunderscore = findfirst(x -> x == '_', imagename[secondunderscore+1:end]) + firstunderscore + secondunderscore
+    thirdunderscore = findfirst(x -> x == '_', imagename[secondunderscore+1:end]) + secondunderscore
     return parse(Int32,imagename[firstunderscore+1:secondunderscore-1]),parse(Int32,imagename[secondunderscore+1:thirdunderscore-1]),parse(Int32,imagename[thirdunderscore+1:end-4])
 end
 
@@ -253,7 +253,7 @@ function getprogress(csvfilename)
     if name[1] == '_'
         return 1, 4500, 1
     else
-        return getpropellerspeedimagenumberfromimagename(imagename)
+        return getpropellerspeedimagenumberfromimagename(name)
     end
 end
 
@@ -270,7 +270,7 @@ function getpropellertiplocations(imagename,trainfilename,verifyfilename)
     traincsv = CSV.File(trainfilename)
     verifycsv = CSV.File(verifyfilename)
     points = []
-    if imagename in traincsv.filename
+    if false#TODO: some of the data is wrong, so im disabling this. imagename in traincsv.filename
         i = findfirst(x -> x == imagename, traincsv.filename)
         points = [(verifycsv.x1[i],verifycsv.y1[i]),(verifycsv.x2[i],verifycsv.y2[i]),(verifycsv.x3[i],verifycsv.y3[i])]
         img = load(imagedirectory*"/"*imagename)
@@ -291,7 +291,7 @@ function getpropellertiplocations(imagename,trainfilename,verifyfilename)
             end
         end
         wait(screen)
-    elseif imagename in verifycsv.filename
+    elseif false#TODO: some of the data is wrong, so im disabling this. imagename in verifycsv.filename
         i = findfirst(x -> x == imagename, verifycsv.filename)
         points = [(verifycsv.x1[i],verifycsv.y1[i]),(verifycsv.x2[i],verifycsv.y2[i]),(verifycsv.x3[i],verifycsv.y3[i])]
         img = load(imagedirectory*"/"*imagename)
@@ -423,7 +423,7 @@ function getcavitationbounds(imagename,center,point)
     return points
 end
 
-function manualdataentry()
+function manualdataentry()#TODO CMB to stop clicking
     propellers = [1,2,3,4,5,6,7,8]
     speeds = collect(4500:500:15000)
     imagenumbers = [1,11,21,31,41,51,61,71,81,91]
@@ -431,7 +431,7 @@ function manualdataentry()
     resultscsv =CSV.File("DATA/camera/model_data/manual_results.csv")
     proprange = findfirst(x -> x==currentprop,propellers):1:length(propellers)
     speedrange = findfirst(x -> x==currentspeed,speeds):1:length(speeds)
-    imagerange = findfirst(x -> x==currentimagenumber,imagenumbers):1:length(imagenumbers)
+    imagerange = (findfirst(x -> x==currentimagenumber,imagenumbers)+1):1:length(imagenumbers)
     for propellerindex = proprange
         propeller = propellers[propellerindex]
         for speedindex = speedrange
@@ -439,6 +439,7 @@ function manualdataentry()
             for imageindex = imagerange #index 1 to 10
                 imagenumber = imagenumbers[imageindex]
                 imagename = "DATASET1_$propeller"*"_$speed"*"_"*lpad(imagenumber,5,"0")*".png"
+                println(imagename)
                 center, points = getpropellertiplocations(imagename,"DATA/camera/model_data/train.csv","DATA/camera/model_data/verify.csv")
                 stringdata = ""
                 for (i, point) in enumerate(points)
