@@ -387,8 +387,8 @@ function getcavitationbounds(imagename,center,point)
     points = Vector{Tuple{Float64, Float64}}([])
     push!(points,center)
     push!(points,point)
-    lines!(scene, points; color = :tomato)
-    scatter!(scene, points, color = :blue, marker = '+')
+    #lines!(scene, points[2:end]; color = :tomato)
+    scatter!(scene, points, color = :red, marker = '+', markersize = 40)
     confirmationflag = false
     on(scene.events.mousebutton) do button
         if ispressed(scene,Mouse.left)
@@ -401,8 +401,8 @@ function getcavitationbounds(imagename,center,point)
                     end
                 else
                     push!(points, mp)
-                    lines!(scene, points; color = :tomato)
-                    scatter!(scene, points, color = :blue, marker = '+')
+                    lines!(scene, points[2:end]; color = :tomato)
+                    scatter!(scene, points, color = :red, marker = '+')
                 end
                 if distance(mp[1],mp[2],center[1],center[2]) <= 30
                     confirmationflag = true
@@ -415,8 +415,9 @@ function getcavitationbounds(imagename,center,point)
                 points = points[1:end-1]
             end
             image!(scene, img, interpolate=false)
-            lines!(scene, points; color = :tomato)
-            scatter!(scene, points, color = :blue, marker = '+')
+            lines!(scene, points[2:end]; color = :tomato)
+            scatter!(scene, points[1:2], color = :red, marker = '+', markersize = 40)
+            scatter!(scene, points, color = :red, marker = '+')
         end
     end
     wait(screen) 
@@ -426,6 +427,8 @@ end
 function manualdataentry()#TODO CMB to stop clicking
     propellers = [1,2,3,4,5,6,7,8]
     speeds = collect(4500:500:15000)
+    #speeds[2] = 5040 #TODO: temp
+    #speeds[3] = 5520
     imagenumbers = [1,11,21,31,41,51,61,71,81,91]
     currentprop, currentspeed, currentimagenumber = getprogress("DATA/camera/model_data/manual_results.csv")
     resultscsv =CSV.File("DATA/camera/model_data/manual_results.csv")
