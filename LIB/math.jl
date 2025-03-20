@@ -92,3 +92,15 @@ function meanoverpercentile(datavector,percentilethreshold)
     thresholddata = thresholdpercentile(datavector,percentilethreshold)
     return meanvec(thresholddata), stdevvec(thresholddata)
 end
+
+function simulatebrushless(t;freq = 50.0)
+    ref = cosd(60.0)
+    temp = sin(freq*2*pi*t)
+    if temp > ref
+        return 1.0
+    elseif temp < -ref
+        return -1.0
+    else
+        return 0.0
+    end
+end

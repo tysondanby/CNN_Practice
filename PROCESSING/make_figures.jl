@@ -1,7 +1,7 @@
 #-----ENVIRONMENT SETUP-------------------------------------------------------
 using Pkg
 Pkg.activate(@__DIR__) 
-required_packages = ["Plots", "CSV", "DataFrames"]
+required_packages = ["Plots", "CSV", "DataFrames", "FFTW", "WAV"]
 function is_installed(pkg)
     return haskey(Pkg.project().dependencies, pkg)
 end
@@ -20,7 +20,7 @@ working_dir = dirname(@__DIR__)
 cd(working_dir)
 #-----END ENVIRONMENT SETUP---------------------------------------------------
 
-using Plots, CSV, DataFrames
+using Plots, CSV, DataFrames, FFTW, WAV, Base.Threads
 include(pwd()*"/LIB/arrayoperations.jl")
 include(pwd()*"/LIB/math.jl")
 #include(pwd()*"/LIB/imageprocessing.jl")
@@ -95,7 +95,7 @@ function filteroverlapandtip(pointset,rcuttoff)
     rmax = Float64(0.0)
     index = npoints
     endindex = findfirst(x->(x>=0.99),pointset[1,:])
-    while (!tipcavitationflag && (index > endindex))#TODO: index > 5 worked if you get a bug here
+    while (!tipcavitationflag && (index > endindex))#index > 5 worked if you get a bug here
         r = Float64(pointset[1,index])
         th = Float64(pointset[2,index])
         if (npoints-index)>1
@@ -108,7 +108,7 @@ function filteroverlapandtip(pointset,rcuttoff)
             lo = hi-1
             newrs = newrs[1:hi]
             newths = newths[1:hi]
-            if (r>rcuttoff) && (findfirst(x->(x>th),newths) == nothing) && false #TODO: false for debug
+            if (r>rcuttoff) && (findfirst(x->(x>th),newths) == nothing) && false 
                 tipcavitationflag = true
                 push!(newrs,newrs[end])
                 push!(newths,2*pi)
@@ -132,7 +132,7 @@ function filteroverlapandtip(pointset,rcuttoff)
     return newpointset
 end
 
-function cleanuppointset(pointset;n = 250, rmin = 0.32, rcuttoff = 0.67)#TODO: rcuttoff may be too low
+function cleanuppointset(pointset;n = 250, rmin = 0.32, rcuttoff = 0.67)
     filteredpointset = filteroverlapandtip(pointset,rcuttoff)
     rclean = collect(range(rmin,1.0; length = n))
     thclean = similar(rclean)
@@ -152,7 +152,7 @@ function cleanuppointset(pointset;n = 250, rmin = 0.32, rcuttoff = 0.67)#TODO: r
         end
         thclean[i] = (((r-rlow)/(rhigh-rlow)) * (thhigh - thlow)) + thlow
     end
-    return rclean,thclean#TODO: splits an array into two vectors. keep this in mind when calling cleanuppointset()
+    return rclean,thclean
 end
 
 function getpointsfromcsv(imagename,propnumber,npointsout)
@@ -188,7 +188,7 @@ function getpropspeeddatafromcsv(propnumber,speed;npoints = 250, percentilethres
             speedname = 5520
         end
     end
-    imagenumbers = [1,11,21,31,41,51,61,71,81,91] #TODO: If I add more samples, this must change.
+    imagenumbers = [1,11,21,31,41,51,61,71,81,91] # If I add more samples, this must change.
     rclean = zeros(npoints)
     nblades = 2
     if contains(threebladed, propnumber)
@@ -263,13 +263,13 @@ function plotwitherrorboth(xpts,ypts,stdevpts,ypts2,stdevpts2)#TODO: edit this t
         p = plot(Shape(shapex,shapey);color = RGBA(linecolor... ,0.2),linecolor = RGBA(0,0,0,0), xlims = xbounds,ylims = ybounds, label = "", legend = :topleft)
         plot!(xpts,ypts, label = "Cavitation Bounds - SH", color = RGBA(linecolor... ,1.0))
         if rtip < 1.0
-            #TODO plot!(Shape([rtip,xbounds[2],xbounds[2],rtip],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor, label = "Tip Vortex Cavitation - SH")
+            # plot!(Shape([rtip,xbounds[2],xbounds[2],rtip],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor, label = "Tip Vortex Cavitation - SH")
         end
         
         plot!(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), label = "")
         plot!(xpts,ypts2, label = "Cavitation Bounds - Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0))
         if rtip2 < 1.0
-            #TODO plot!(Shape([rtip2,xbounds[2],xbounds[2],rtip2],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor2, label = "Tip Vortex Cavitation - Smooth Hydrophillic")
+            # plot!(Shape([rtip2,xbounds[2],xbounds[2],rtip2],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor2, label = "Tip Vortex Cavitation - Smooth Hydrophillic")
         end
         plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = :gray, label = "Propeller Hub")
         return p
@@ -277,13 +277,13 @@ function plotwitherrorboth(xpts,ypts,stdevpts,ypts2,stdevpts2)#TODO: edit this t
         p = plot(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), xlims = xbounds,ylims = ybounds, label = "", legend = :topleft)
         plot!(xpts,ypts2, label = "Cavitation Bounds - Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0))
         if rtip2 < 1.0
-            #TODO plot!(Shape([rtip2,xbounds[2],xbounds[2],rtip2],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor2, label = "Tip Vortex Cavitation - Smooth Hydrophillic")
+            # plot!(Shape([rtip2,xbounds[2],xbounds[2],rtip2],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor2, label = "Tip Vortex Cavitation - Smooth Hydrophillic")
         end
 
         plot!(Shape(shapex,shapey);color = RGBA(linecolor... ,0.2),linecolor = RGBA(0,0,0,0), label = "")
         plot!(xpts,ypts, label = "Cavitation Bounds - SH", color = RGBA(linecolor... ,1.0))
         if rtip < 1.0
-           #TODO plot!(Shape([rtip,xbounds[2],xbounds[2],rtip],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor, label = "Tip Vortex Cavitation - SH")
+           # plot!(Shape([rtip,xbounds[2],xbounds[2],rtip],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = tipvortexcolor, label = "Tip Vortex Cavitation - SH")
         end
         plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = :gray, label = "Propeller Hub")
         return p
@@ -296,7 +296,7 @@ function plotspeed(propnumber,speed)#Deprecated
     return plotwitherror(rclean, thout .- thcontrol, @. sqrt(stdev^2 + stdev2^2))
 end
 
-function plotspeedboth(propnumber,speed)#TODO: find the control a different way
+function plotspeedboth(propnumber,speed)
     rclean, thout, stdev = getpropspeeddatafromcsv(propnumber,speed)
     rclean, thout2, stdev2 = getpropspeeddatafromcsv(propnumber+4,speed)
     return plotwitherrorboth(rclean, thout, stdev,thout2, stdev2)
@@ -310,5 +310,115 @@ function createvisualfigures()
             p = plotspeedboth(prop,speed)
             savefig(p,"DATA/output/figures/highspeed_$prop"*"_$speed"*".png")
         end
+    end
+end
+
+#--------------AUDIO
+
+function gettorquedatafromwav(filename; segmentlength = 0.5, segmentfrequency = 0.125)
+    pts, fs = wavread(filename)
+    nptsinsegment = Int64(floor(segmentlength*fs/2))*2
+    nptsbetweensegments = Int64(floor(segmentfrequency*fs))
+    nsegments = Int64(floor((length(pts) - (2*nptsinsegment))/nptsbetweensegments))
+    middleindicies = collect(nptsinsegment:nptsbetweensegments:(length(pts)-nptsinsegment))
+    bottomindicies = middleindicies .- Int64(floor(nptsinsegment/2))
+    topindicies = middleindicies .+ nptsinsegment .- Int64(floor(nptsinsegment/2)+1)
+    ts = (1/fs) * middleindicies
+    speeds = similar(ts)
+    torques = similar(ts)
+    center = meanvec(pts)
+    #Threads.@threads 
+    for (i,t) in enumerate(ts)
+        firstindex = bottomindicies[i]
+        lastindex = topindicies[i]
+        segpts = pts[firstindex:lastindex]
+        deltat = (1/fs) * (lastindex-firstindex)
+        kmax = Int64(floor(666.7 * deltat))#20k RPM
+        segfft = abs.(fft(segpts))[1:kmax]
+        k = findfirst(x->(x >= maximum(segfft)),segfft)
+        speeds[i] = 60*((k-1)/deltat)*(1/2)
+        torques[i] = meanvec(abs.(segpts .- center))*1.5#*Nm_per_one#segfft[k]*Nm_per_one
+    end
+    return ts, speeds, torques
+end
+
+function gettorquedatafromcsv(filename,Nm_per_V; segmentlength = 0.5, segmentfrequency = 0.125)
+    tpts, ypts = readmotorcsv(filename)#TODO
+    nptsinsegment = Int64(floor(segmentlength*5000))#The DAQ is always 5kHz
+    nptsbetweensegments = Int64(floor(segmentfrequency*5000))
+    nsegments = Int64(floor((length(ypts) - (2*nptsinsegment))/nptsbetweensegments))
+    middleindicies = collect(nptsinsegment:nptsbetweensegments:(length(ypts)-nptsinsegment))
+    bottomindicies = middleindicies .- Int64(floor(nptsinsegment/2))
+    topindicies = middleindicies .+ nptsinsegment .- Int64(floor(nptsinsegment/2)+1)
+    ts = (1/5000) * middleindicies
+    speeds = similar(ts)
+    torques = similar(ts)
+    center = meanvec(ypts)
+    #Threads.@threads 
+    for (i,t) in enumerate(ts)
+        firstindex = bottomindicies[i]
+        lastindex = topindicies[i]
+        segpts = pts[firstindex:lastindex]
+        torques[i] = meanvec(abs.(segpts .- center))*1.5*Nm_per_V
+    end
+    return ts, torques
+end
+
+function getsounddatafromwav(filename; segmentlength = 0.5, segmentfrequency = 0.125)
+    pts, fs = wavread(filename)
+    nptsinsegment = Int64(floor(segmentlength*fs/2))*2
+    nptsbetweensegments = Int64(floor(segmentfrequency*fs))
+    nsegments = Int64(floor((length(pts) - (2*nptsinsegment))/nptsbetweensegments))
+    middleindicies = collect(nptsinsegment:nptsbetweensegments:(length(pts)-nptsinsegment))
+    bottomindicies = middleindicies .- Int64(floor(nptsinsegment/2))
+    topindicies = middleindicies .+ nptsinsegment .- Int64(floor(nptsinsegment/2)+1)
+    ts = (1/fs) * middleindicies
+    frequencies = collect(0:1:(nsegments/2 - 1))./(ts[2]-ts[1])
+    spectra = zeros(length(ts),length(frequencies))
+    #Threads.@threads 
+    for (i,t) in enumerate(ts)
+        firstindex = bottomindicies[i]
+        lastindex = topindicies[i]
+        segpts = pts[firstindex:lastindex]
+        spectra[i,:] = abs.(fft(segpts))[1:(nptsinsegment/2)]#TODO: the intensities should be normalized.
+    end
+    return frequencies, spectra
+end
+
+function cavitationnumberfromRPM(speeds;pressure = getpressure(prop))#TODO
+end
+
+function getpropaudiodata(prop::String)
+    segmentstomatch = 25
+    Nm_per_V = 1.0#TODO
+    tswav, speeds, torqueswav = gettorquedatafromwav("DATA/camera/raw/motor/"*prop*".WAV"; segmentlength = 0.5, segmentfrequency = 0.125)
+    tscsv, torquescsv = gettorquedatafromwav("DATA/camera/raw/motor/"*prop*".csv",Nm_per_V; segmentlength = 0.5, segmentfrequency = 0.125)
+    frequencies, spectra = getsounddatafromwav("DATA/camera/raw/hydrophone/"*prop*".WAV"; segmentlength = 0.5, segmentfrequency = 0.125)
+    maxtorquewav = maximum(torqueswav)
+    maxtorquecsv = maximum(torquescsv)
+    motoronwav = findfirst(x->(x>(0.1*maxtorquewav)),torqueswav)
+    motoroncsv = findfirst(x->(x>(0.1*maxtorquecsv)),torquescsv)
+    avgwav = meanvec(torqueswav[(motoronwav-1):(motoronwav + segmentstomatch - 2)])
+    avgcsv = meanvec(torquescsv[(motoroncsv-1):(motoroncsv + segmentstomatch - 2)])
+    torques = torqueswav*(avgcsv/avgwav)
+    return tswav, speeds, torques, frequencies, spectra
+end
+
+function analyzeaudio()#TODO
+    props = ["1" "2" "3" "4" "5" "6" "7" "8"]
+    slow = [2 6]
+    temp1, normalizationspeedsslow, normalizationtorquesslow, temp2, temp3 = getpropaudiodata("0_1")
+    temp1, normalizationspeedsfast, normalizationtorquesfast, temp2, temp3 = getpropaudiodata("0_1")#TODO: use proper file ref
+    slownormalizationtorquefromspeed, slownormalizationspectrumfromspeed = getnormalizationtorquefunction(normalizationtorquesslow,normalizationspeedsslow)#TODO Fit a function to the normalization data (normalizationtorques,normalizationspeeds) (likely quadratic)
+    fastnormalizationtorquefromspeed, fastnormalizationspectrumfromspeed = getnormalizationtorquefunction(normalizationtorquesfast,normalizationspeedsfast)
+    for i = 1:1:length(props)
+        ts, speeds, torques, frequencies, spectra = getpropaudiodata(props[i])
+        cavitationnumbers = cavitationnumberfromRPM.(speeds;pressure = getpressure(props[i]))#TODO: two functions
+        torqueconstants = similar(cavitationnumbers)
+        for j = 1:1:length(torqueconstants)
+            torqueconstants[j] = torqueconstantfromtorque(torques[j],speeds,normalizationtorquefromspeed)#TODO
+        end
+        #TODO: process spectra with normalization data
+        #TODO: add a plot making function
     end
 end
