@@ -29,6 +29,16 @@ invert = [1 5]
 imagedirectory = "DATA/camera/prepared"
 manual_resultscsv = CSV.File("DATA/camera/model_data/manual_results.csv")
 
+macro suppress_output(ex)
+    return quote
+        redirect_stdout(devnull) do
+            redirect_stderr(devnull) do
+                $(esc(ex))
+            end
+        end
+    end
+end
+
 function getdatafromimagename(imagename)
     index = findfirst(i->(i==imagename), manual_resultscsv.filename)
     return manual_resultscsv.data[index]
@@ -314,6 +324,57 @@ function createvisualfigures()
 end
 
 #--------------AUDIO
+function pruneslow(ts, speeds, torques)
+    newts = []
+    newspeeds = []
+    newtorques = []
+    indicies = []
+    for i = 1:1:length(ts)
+        if speeds[i] > 4000.0
+            push!(newts,ts[i])
+            push!(newspeeds,speeds[i])
+            push!(newtorques,torques[i])
+            push!(indicies,i)
+        end
+    end
+    return newts, newspeeds, newtorques, indicies
+end
+
+function prunefastspeedchangeonce(ts, speeds, torques, indicies; delta = 0.0)
+    newts = [ts[1]]
+    newspeeds = [speeds[1]]
+    newtorques = [torques[1]]
+    newindicies = [indicies[1]]
+    for i = 2:1:(length(ts)-1)
+        if (abs(speeds[i] - speeds[i-1]) < delta) #|| (abs(speeds[i] - speeds[i+1]) < 400.0)
+            push!(newts,ts[i])
+            push!(newspeeds,speeds[i])
+            push!(newtorques,torques[i])
+            push!(newindicies,indicies[i])
+        end
+    end
+    push!(newts,ts[end])
+    push!(newspeeds,speeds[end])
+    push!(newtorques,torques[end])
+    push!(newindicies,indicies[end])
+    return newts, newspeeds, newtorques, newindicies
+end
+
+function prunefastspeedchange(ts, speeds, torques,indicies; delta = 0.0)
+    oldts = deepcopy(ts)
+    oldspeeds = deepcopy(speeds)
+    oldtorques = deepcopy(torques)
+    newts, newspeeds, newtorques, newindicies = prunefastspeedchangeonce(ts, speeds, torques,indicies; delta = delta)
+    while length(newts) != length(oldts)
+        oldts = deepcopy(newts)
+        oldspeeds = deepcopy(newspeeds)
+        oldtorques = deepcopy(newtorques)
+        oldindicies = deepcopy(newindicies)
+        newts, newspeeds, newtorques,newindicies = prunefastspeedchangeonce(oldts, oldspeeds, oldtorques, oldindicies; delta = delta)
+    end
+    return newts, newspeeds, newtorques,newindicies
+end
+
 
 function gettorquedatafromwav(filename; segmentlength = 0.5, segmentfrequency = 0.125)
     pts, fs = wavread(filename)
@@ -335,11 +396,25 @@ function gettorquedatafromwav(filename; segmentlength = 0.5, segmentfrequency = 
         deltat = (1/fs) * (lastindex-firstindex)
         kmax = Int64(floor(666.7 * deltat))#20k RPM
         segfft = abs.(fft(segpts))[1:kmax]
-        k = findfirst(x->(x >= maximum(segfft)),segfft)
-        speeds[i] = 60*((k-1)/deltat)*(1/2)
+        k = 1
+        findfactor = 0.1
+        newspeed = 0.0
+        while (newspeed < 4000.0) & (findfactor <= 1.0)
+            k = findfirst(x->(x >= 0.1*maximum(segfft)),segfft)
+            newspeed = 60*((k-1)/deltat)*(1/2)
+            findfactor = findfactor + 0.01
+        end
+        speeds[i] = newspeed
         torques[i] = meanvec(abs.(segpts .- center))*1.5#*Nm_per_one#segfft[k]*Nm_per_one
+        #println((torques[i],segfft[k]))
     end
-    return ts, speeds, torques
+    return ts,speeds,torques
+end
+
+function gettorquecalibrationfromwav(filename)
+    pts, fs = wavread(filename)
+    center = meanvec(pts)
+    return meanvec(abs.(pts .- center))*1.5
 end
 
 function readmotorcsv(filename)
@@ -386,9 +461,9 @@ function getsounddatafromwav(filename; segmentlength = 0.5, segmentfrequency = 0
         firstindex = bottomindicies[i]
         lastindex = topindicies[i]
         segpts = pts[firstindex:lastindex]
-        spectra[i,:] = (abs.(fft(segpts)))[1:Int64(length(segpts)/2)]#TODO: the intensities should be normalized.
+        spectra_fft[i,:] = (abs.(fft(segpts)))[1:Int64(length(segpts)/2)]#TODO: the intensities should be normalized into power spectral density
     end
-    frequencybinlims = vcat([0],collect(1:2:99),exp10.(range(log10(101), stop=log10(48010), length=200)))#TODO: adjust number of bins if GPR is fitting too slowly.
+    frequencybinlims = vcat([0],collect(1:2:99),exp10.(range(log10(101), stop=log10(48010), length=200)))#adjust number of bins if GPR is fitting too slowly.
     binnedspectra = zeros(length(ts),length(frequencybinlims)-1)
     frequencies_fft_index = 1
     push!(frequencies_fft, 2*frequencybinlims[end])#prevents a bug in the while loop where frequencies_fft is indexed beyond its size
@@ -409,9 +484,9 @@ end
 
 function getpressure(prop)
     if (prop == "5") || (prop == "7")
-        return 88000.0, 2872 #TODO: update
+        return 85337.0, 3070.0 # 88000, 2800
     else
-        return 88000.0, 2872
+        return 85337.0, 3070.0
     end
 end
 
@@ -421,16 +496,17 @@ function cavitationnumberfromRPM(speeds;prop = "1")
     if (prop == "2") || (prop == "6")
         m_advance_per_rev = 0.025401
     end
-    tip_speeds = sqrt.((speeds*60*m_advance_per_rev) .^ 2 .+ (speeds*60*0.079796) .^ 2)
-    return @. (pressure_a - pressure_v)/(0.5*997.45*(speeds^2))
+    tip_speeds = sqrt.((speeds*m_advance_per_rev/60) .^ 2 .+ (speeds*0.079796/60) .^ 2)
+    return @. (pressure_a - pressure_v)/(0.5*997.45*(tip_speeds^2))
 end
 
 function getpropaudiodata(prop::String)
-    Nm_per_oneamplitude = 1.0  #TODO: just get this conversion factor manually from what you recorded on LABview divided by the wavtorque in that same section
-    tswav, speeds, torqueswav = gettorquedatafromwav("DATA/camera/raw/motor/"*prop*".WAV"; segmentlength = 0.5, segmentfrequency = 0.125)
-    frequencies, spectra = getsounddatafromwav("DATA/camera/raw/hydrophone/"*prop*".WAV"; segmentlength = 0.5, segmentfrequency = 0.125)
-    torques = torqueswav*Nm_per_oneamplitude
-    return tswav, speeds, torques, frequencies, spectra
+    Nm_per_oneamplitude = .25412932  #just get this conversion factor manually from what you recorded on LABview divided by the wavtorque in that same section
+    tsmotor, speedsraw, torquesraw = gettorquedatafromwav("DATA/hydrophone/raw/DATASET1_"*prop*"/motor.wav"; segmentlength = 0.5, segmentfrequency = 0.125)
+    frequencybinlims, spectrabins = getsounddatafromwav("DATA/hydrophone/raw/DATASET1_"*prop*"/hydrophone.wav"; segmentlength = 0.5, segmentfrequency = 0.125)
+    ts, speeds, torques, indicies = prunefastspeedchange(prunefastspeedchangeonce(pruneslow(tsmotor, speedsraw, torquesraw)...; delta = 400.0)...;  delta = 900.0)
+    torques = torques*Nm_per_oneamplitude
+    return ts[1:end-1], speeds[1:end-1], torques[1:end-1], frequencybinlims, spectrabins[indicies[1:end-1],:]
 end
 
 function torqueconstantsfromtorques(torques,speeds,normalizationtorquefromspeed)
@@ -438,57 +514,167 @@ function torqueconstantsfromtorques(torques,speeds,normalizationtorquefromspeed)
     for i = 1:1:length(torques)
         normalizationtorque = normalizationtorquefromspeed(speeds[i])#TODO: this has some uncertainty, maybe add a way to account for it.
         realtorque = torques[i] - normalizationtorque
-        torqueconstants[i] = realtorque/(997.45*((speeds[i]*60)^2)*(0.0254^5))
+        torqueconstants[i] = realtorque/(997.45*((speeds[i]/60)^2)*(0.0254^5))
     end
     return torqueconstants
 end
 
-function fittorqueandspectrumtospeed(speeds,torques,spectra)
-    kernel = SE(1.0, 1.0)
-    gp_torque = GP(Float64.(speeds), Float64.(torques), MeanZero(), kernel, 0.0)
-    optimize!(gp_torque)#TODO: this is very slow, find a way to find out how slow
+function downsample(speeds_full,torques_full,spectra_full)#TODO: seems to downsample too much. (to 60 instead of 500)
+    similaritythreshold = 0.01
+    duplicationthreshold = 0.01
+    targetlength = 500
+    indicies = []
+    indicies_temp = []
+    speeds_temp = [-1000.0]
+    n_ittr = Int64(floor(length(speeds_full)/5))
+    for i = 1:1:n_ittr
+        range_five = ((n_ittr-1)*5+1):(n_ittr*5)
+        five_speeds = speeds_full[range_five]
+        avg_speed = meanvec(five_speeds)
+        if (maximum(five_speeds) < ((1+similaritythreshold)*avg_speed)) && (minimum(five_speeds) > ((1-similaritythreshold)*avg_speed))
+            nsimilar = sum(Int64((x > (avg_speed-100))&&(x < (avg_speed+100))) for x in speeds_temp)
+            if (nsimilar/length(speeds_full)) < duplicationthreshold
+                append!(indicies_temp,collect(range_five))
+                append!(speeds_temp,five_speeds)
+            end
+        end
+    end
+    if length(indicies_temp) >= targetlength
+        jump = length(indicies_temp)/targetlength
+        i = 0
+        jump_tracker = 0
+        while i <= length(indicies_temp)
+            jump_tracker = jump + jump_tracker
+            while jump_tracker >= 1
+                i = i + 1
+                jump_tracker = jump_tracker - 1
+            end
+            push!(indicies,indicies_temp[i])
+        end
+    else
+        indicies = indicies_temp
+    end
+    speeds = zeros(length(indicies))
+    torques = zeros(length(indicies))
+    spectra = zeros(length(indicies),size(spectra_full)[2])
+    for (j,i) in enumerate(indicies)
+        speeds[j] = speeds_full[i]
+        torques[j] = torques_full[i]
+        spectra[j,:] = spectra_full[i,:]
+    end
+    return speeds, torques, spectra
+end
+
+function fittorqueandspectrumtospeed(speeds_full, torques_full, spectra_full)
+    speeds, torques, spectra = downsample(speeds_full, torques_full, spectra_full)
+    speeds .+= 3*pi * randn(length(speeds))
+    
+    # Check for NaNs or Infs in speeds, torques, and spectra
+    if any(isnan, speeds) || any(isinf, abs.(speeds))
+        error("Found NaN or Inf in speeds.")
+    end
+    if any(isnan, torques) || any(isinf, abs.(torques))
+        error("Found NaN or Inf in torques.")
+    end
+    if any(isnan, spectra) || any(isinf, abs.(spectra))
+        error("Found NaN or Inf in spectra.")
+    end
+
+    println("Downsampled spectra size: ", size(spectra))
+
+    # Set up kernel and log-noise (jitter to avoid PosDef errors)
+    kernel = SEIso(log(1.0), log(0.1))
+    log_noise_torque = log((0.001*meanvec(torques))^2)#adjust these values to tweak the fit.
+    log_noise_spectra = log(1e-1)
+
+    # GP for torque
+    gp_torque = GP(Float64.(speeds), Float64.(torques), MeanZero(), kernel, log_noise_torque)
+    optimize!(gp_torque; noise=false)
+
+    # GPs for each frequency
+    gp_spectra = Vector{GPE}(undef, size(spectra, 2))
+    for i in 1:size(spectra, 2)
+        y = Float64.(spectra[:, i])
+        gp = GP(Float64.(speeds), y, MeanZero(), kernel, log_noise_spectra)
+        optimize!(gp; noise=false)
+        gp_spectra[i] = gp
+    end
+
+    # GP evaluation closures
+    function torquefromspeed(speed)
+        torque, _ = predict_y(gp_torque, [Float64(speed)])
+        return torque[1]
+    end
+
+    function spectrumfromspeed(speed)
+        spectrumout = similar(spectra[1, :])
+        for i in 1:length(spectrumout)
+            prediction, _ = predict_y(gp_spectra[i], [Float64(speed)])
+            spectrumout[i] = prediction[1]
+        end
+        return spectrumout
+    end
+
+    return torquefromspeed, spectrumfromspeed
+end
+
+#=
+function fittorqueandspectrumtospeed(speeds_full,torques_full,spectra_full)
+    speeds,torques,spectra = downsample(speeds_full,torques_full,spectra_full)
+    println(size(spectra))
+    kernel = SEIso(log(1.0), log(0.1))#SE(1.0, 1.0)
+    gp_torque = GP(Float64.(speeds), Float64.(torques), MeanZero(), kernel, 1e-3)
+    optimize!(gp_torque; noise = true)
     gp_spectra = []
     frequenciesinspectrum = size(spectra)[2]
     for i = 1:1:frequenciesinspectrum
-        gp_thisfrequency = GP(Float64.(speeds), Float64.(spectra[:,i]), MeanZero(), kernel, 0.0)
-        optimize!(gp_thisfrequency)
+        gp_thisfrequency = GP(Float64.(speeds), Float64.(spectra[:,i]), MeanZero(), kernel, 1e-3)
+        optimize!(gp_thisfrequency; noise = true)
         push!(gp_spectra,gp_thisfrequency)
     end
     function torquefromspeed(speed)
-        torque, uncertainty = predict_y(gp_torque, speed)
-        return torque
+        torque, uncertainty = predict_y(gp_torque, [Float64(speed)])
+        return torque[1]
     end
     function spectrumfromspeed(speed)
         spectrumout = similar(spectra[1,:])
         uncertaintyout = similar(spectra[1,:])
         for i = 1:1:length(spectrumout)
-            spectrumout[i],uncertaintyout[i] = predict_y(gp_spectra[i], speed)
+            temp,uncertaintyout[i] = predict_y(gp_spectra[i], [Float64(speed)])
+            spectrumout[i] = temp[1]
         end
         return spectrumout
     end
     return torquefromspeed, spectrumfromspeed
-end
+end =#
+
+
 
 function analyzeaudio()
-    props = ["3"]#["1" "2" "3" "4" "5" "6" "7" "8"]
+    props = ["1" "2" "3" "4" "5" "6" "7" "8"]
     slow = ["2" "6"]
-    temp1, normalizationspeedsslow, normalizationtorquesslow, temp2, normalizationspectraslow = getpropaudiodata("0")
-    temp1, normalizationspeedsfast, normalizationtorquesfast, temp2, normalizationspectrafast = getpropaudiodata("0")#TODO: use proper file ref split into 0_1 and 0_2
-    println(size(normalizationspectraslow))
-    slownormalizationtorquefromspeed, slownormalizationspectrumfromspeed = fittorqueandspectrumtospeed(normalizationspeedsslow,normalizationtorquesslow,normalizationspectraslow)#TODO: this is very slow, consider downsampling
-    fastnormalizationtorquefromspeed, fastnormalizationspectrumfromspeed = fittorqueandspectrumtospeed(normalizationspeedsfast,normalizationtorquesfast,normalizationspectrafast)
+    temp1, normalizationspeedsslow, normalizationtorquesslow, temp2, normalizationspectraslow = getpropaudiodata("0_1")
+    temp1, normalizationspeedsfast, normalizationtorquesfast, temp2, normalizationspectrafast = getpropaudiodata("0_2")
+    #println(size(normalizationspectrafast))
+    #println(length(normalizationtorquesfast))
+    slownormalizationtorquefromspeed, slownormalizationspectrumfromspeed = fittorqueandspectrumtospeed(Float64.(normalizationspeedsslow),Float64.(normalizationtorquesslow),Float64.(normalizationspectraslow))
+    fastnormalizationtorquefromspeed, fastnormalizationspectrumfromspeed = fittorqueandspectrumtospeed(Float64.(normalizationspeedsfast),Float64.(normalizationtorquesfast),Float64.(normalizationspectrafast))
     for i = 1:1:length(props)
+        println(props[i])
         ts, speeds, torques, frequencies, spectra = getpropaudiodata(props[i])
         cavitationnumbers = cavitationnumberfromRPM.(speeds;prop = props[i])
         torqueconstants = similar(cavitationnumbers)
         if contains(slow,props[i])
-            torqueconstants[j] = torqueconstantfromtorque(torques,speeds,slownormalizationtorquefromspeed)
+            torqueconstants = torqueconstantsfromtorques(torques,speeds,slownormalizationtorquefromspeed)
         else
-            torqueconstants[j] = torqueconstantfromtorque(torques,speeds,slownormalizationtorquefromspeed)
+            torqueconstants = torqueconstantsfromtorques(torques,speeds,fastnormalizationtorquefromspeed)
         end
         #TODO: process spectra with normalization data
         #TODO: add a plot making function
-        p =plot(cavitationnumbers,torqueconstants)
-        savefig(p,"DATA/output/figures/torque_$prop"*"_$speed"*".png")
+        prop = parse(Int64, props[i])
+        #p =plot(speeds,torques)
+        #scatter!(speeds,torques)
+        p =plot(cavitationnumbers,torqueconstants; xscale = :log10)
+        savefig(p,"DATA/output/figures/torque_v_cavitation_$prop"*".png")
     end
 end
