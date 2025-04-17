@@ -94,7 +94,7 @@ function fittorqueandspectrumtospeed(speeds_full, torques_full, spectra_full)
         error("Found NaN or Inf in spectra.")
     end
 
-    println("Downsampled spectra size: ", size(spectra))
+    #println("Downsampled spectra size: ", size(spectra))
 
     # Set up kernel and log-noise (jitter to avoid PosDef errors)
     kernel = SEIso(log(1.0), log(0.1))
@@ -111,7 +111,7 @@ function fittorqueandspectrumtospeed(speeds_full, torques_full, spectra_full)
         y = Float64.(spectra[:, i])
         log_noise_spectra = log((0.001*meanvec(y))^2) #try to debug
         gp = GP(Float64.(speeds), y, MeanZero(), kernel, log_noise_spectra)
-        optimize!(gp; noise=false)
+        #optimize!(gp; noise=false)#DEBUG: this is unused, so it is disabled.
         gp_spectra[i] = gp
     end
 

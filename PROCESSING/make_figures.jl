@@ -137,22 +137,59 @@ include(pwd()*"/PROCESSING/nondimensionalize_audio.jl")
 
 include(pwd()*"/PROCESSING/audio_GPR.jl")
 
+function makespectrumplottable(frequencies,spectrum1,spectrum2)
+    x = []
+    y1 = []
+    y2 = []
+    for j = 1:1:(length(frequencies)-1)
+        push!(x,frequencies[j])
+        push!(y1,spectrum1[j])
+        push!(y2,spectrum2[j])
+        push!(x,frequencies[j+1])
+        push!(y1,spectrum1[j])
+        push!(y2,spectrum2[j])
+    end
+    x[1] = 1.0
+    return x, y1, y2
+end
+
+function getspectrumaroundspeed(speed,speeds,spectra; speedrange = 100.0)#TODO: make this function
+    totalweight = 0.0
+    spectrum = zeros(size(spectra)[2])
+    for i = 1:1:length(speeds)
+        if (speeds[i] < (speed + speedrange)) && (speeds[i] > (speed - speedrange))
+            weight = 1.0 #This will be different if using a gaussian average
+            totalweight = weight + totalweight
+            spectrum  = spectrum + (weight*spectra[i,:])
+        end
+    end
+    spectrum = spectrum ./ totalweight
+    return spectrum
+end
+
 function analyzeaudio()
     props = ["1" "2" "3" "4" "5" "6" "7" "8"]
     slow = ["2" "6"]
     speeds_to_graph = [4500 5000 5500 6000 6500 7000 7500 8000 8500 9000 9500 10000 10500 11000 11500 12000 12500 13000 13500 14000 14500 15000]
-    temp1, normalizationspeedsslow, normalizationtorquesslow, temp2, normalizationspectraslow = getpropaudiodata("0_1")
-    temp1, normalizationspeedsfast, normalizationtorquesfast, temp2, normalizationspectrafast = getpropaudiodata("0_2")
-    slownormalizationtorquefromspeed, slownormalizationspectrumfromspeed = fittorqueandspectrumtospeed(Float64.(normalizationspeedsslow),Float64.(normalizationtorquesslow),Float64.(normalizationspectraslow))
+    println("Loading control audio 1 / 2")
+    temp1, normalizationspeedsslow, normalizationtorquesslow, temp2, normalizationspectraslow, hydrophone_avg_slow = getpropaudiodata("0_1")
+    println("Loading control audio 2 / 2")
+    temp1, normalizationspeedsfast, normalizationtorquesfast, temp2, normalizationspectrafast, hydrophone_avg_fast = getpropaudiodata("0_2")
+    println("GPR fitting control audio 1 / 2")
+    slownormalizationtorquefromspeed, slownormalizationspectrumfromspeed = fittorqueandspectrumtospeed(Float64.(normalizationspeedsslow),Float64.(normalizationtorquesslow),Float64.(normalizationspectraslow))#TODO: get the slownormalizationtorquefromspeed from somewhere other than GPR
+    println("GPR fitting control audio 2 / 2")
     fastnormalizationtorquefromspeed, fastnormalizationspectrumfromspeed = fittorqueandspectrumtospeed(Float64.(normalizationspeedsfast),Float64.(normalizationtorquesfast),Float64.(normalizationspectrafast))
     spectrafromspeeds = []
     torqueconstantssets = []
     cavitationnumberssets = []
     spectrasets = []
     frequencies = []
+    speedsets = []
+    hydrophone_avgs = []
     for i = 1:1:length(props)
-        println(props[i])
-        ts, speeds, torques, frequencies, spectra = getpropaudiodata(props[i])
+        println("Reading propeller audio "*props[i]*" / $(length(props))")
+        ts, speeds, torques, frequencies, spectra, hydrophone_avg = getpropaudiodata(props[i])
+        push!(hydrophone_avgs,hydrophone_avg)
         push!(cavitationnumberssets,cavitationnumberfromRPM.(speeds;prop = props[i]))
         torqueconstants = similar(cavitationnumberssets[end])
         if contains(slow,props[i])
@@ -160,43 +197,50 @@ function analyzeaudio()
         else
             push!(torqueconstantssets,torqueconstantsfromtorques(torques,speeds,fastnormalizationtorquefromspeed))
         end
-        push1(spectrasets,spectra)
-        torquefromspeed, spectrumfromspeed = fittorqueandspectrumtospeed(Float64.(speeds),Float64.(torques),Float64.(spectra))
-        p =plot(spectra[100:150,:]; xscale = :log10)
-        savefig(p,"DATA/output/figures/test_$i"*".png")
-        push!(spectrafromspeeds,spectrumfromspeed)
-        prop = parse(Int64, props[i])
-        println(length(frequencies))
-        println(size(spectra))
+        push!(spectrasets,spectra)
+        push!(speedsets,speeds)
+        #torquefromspeed, spectrumfromspeed = fittorqueandspectrumtospeed(Float64.(speeds),Float64.(torques),Float64.(spectra))
+        #p =plot(spectra[100:150,:]; xscale = :log10)
+        #savefig(p,"DATA/output/figures/test_$i"*".png")
+        #push!(spectrafromspeeds,spectrumfromspeed)
+        #prop = parse(Int64, props[i])
+        #println(length(frequencies))
+        #println(size(spectra))
     end
     #MAKE PLOTS----------------------
+    nplots = 4 + 4*length(speeds_to_graph)
+    nplotted = 0
     #torque vs cavitation
     for i = 1:1:4
+        nplotted = nplotted + 1
+        println("Plotting $nplotted / $nplots")
         p =plot(cavitationnumberssets[i],torqueconstantssets[i]; xscale = :log10)#TODO: plot formatting, labels, etc
         plot!(cavitationnumberssets[i+4],torqueconstantssets[i+4])
         savefig(p,"DATA/output/figures/torque_v_cavitation_$i"*".png")
-        #spectra at each speed
-        #TODO: Stop using GPR
-        for speed in speeds_to_graph #TODO: label with cavitation number. Convert to PSD
-            xoriginal = frequencies
-            y1original = spectrafromspeeds[i](speed)#TODO: subtract background
-            y2original = spectrafromspeeds[i+4](speed)
-            println(y1original)
-            x = []
-            y1 = []
-            y2 = []
-            for j = 1:1:(length(frequencies)-1)
-                push!(x,xoriginal[j])
-                push!(y1,y1original[j])
-                push!(y2,y2original[j])
-                push!(x,xoriginal[j+1])
-                push!(y1,y1original[j])
-                push!(y2,y2original[j])
+    end
+    for speed in speeds_to_graph
+        slow_background_spectrum = getspectrumaroundspeed(speed,normalizationspeedsslow,normalizationspectraslow)
+        fast_background_spectrum = getspectrumaroundspeed(speed,normalizationspeedsslow,normalizationspectraslow)
+        xc, ycslow, ycfast = makespectrumplottable(frequencies,slow_background_spectrum,fast_background_spectrum)
+        for i = 1:1:4
+            nplotted = nplotted + 1
+            println("Plotting $nplotted / $nplots")
+            spectrum1 = getspectrumaroundspeed(speed,speedsets[i],spectrasets[i])
+            spectrum2 = getspectrumaroundspeed(speed,speedsets[i+4],spectrasets[i+4])
+            x, y1, y2 = makespectrumplottable(frequencies,spectrum1,spectrum2)
+            p=plot(x,[y1 y2];xscale = :log10, label = ["Hydrophillic" "SH"], legend = :outertopright)#TODO: label with cavitation number
+            if i == 2
+                shift = 10*log10(hydrophone_avg_slow/(0.5*hydrophone_avgs[i] + 0.5*hydrophone_avgs[i+4]))#adjusts relative amplitude of control data
+                #println(shift)
+                plot!(xc,ycslow .+ shift; label = "No Propeller")
+            else
+                shift = 10*log10(hydrophone_avg_fast/(0.5*hydrophone_avgs[i] + 0.5*hydrophone_avgs[i+4]))#adjusts relative amplitude of control data
+                #println(shift)
+                plot!(xc,ycfast .+ shift; label = "No Propeller")
             end
-            p2 =plot(x,[y1 y2]; xscale = :log10, xlims = (1,100000))
-            savefig(p2,"DATA/output/figures/PSD_$i"*"_$speed.png")
+            xlabel!("Frequency (Hz)")
+            ylabel!("dB/Hz")
+            savefig(p,"DATA/output/figures/PSD_$i"*"_$speed"*".png")
         end
     end
-    
-
 end
