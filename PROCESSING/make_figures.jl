@@ -59,8 +59,8 @@ function plotwitherror(xpts,ypts,stdevpts)
 end =#
 
 function plotwitherrorboth(xpts,ypts,stdevpts,ypts2,stdevpts2)#TODO: edit this to have titles and legend in the correct spot
-    linecolor = (1.0,0.0,0.0)
-    linecolor2 = (0.0,1.0,0.0)
+    linecolor = (0.0,0.0,0.0)
+    linecolor2 = (0.0,0.0,0.0)
     tipvortexcolor = RGBA(0.6,0.7,1.0,1.0)
     tipvortexcolor2 = RGBA(0.6,0.7,1.0,1.0)
     yptshigh = ypts + stdevpts
@@ -71,7 +71,7 @@ function plotwitherrorboth(xpts,ypts,stdevpts,ypts2,stdevpts2)#TODO: edit this t
     yptslow2 = ypts2 - stdevpts2
     shapex2 = vcat(xpts,reverse(xpts))
     shapey2 = vcat(yptshigh2,reverse(yptslow2))
-    xbounds = (0,1)
+    xbounds = (0.2,1)
     ybounds = (-0.05,1)
     
     index1 = findfirst(x->(x> 1.0),ypts)
@@ -87,18 +87,18 @@ function plotwitherrorboth(xpts,ypts,stdevpts,ypts2,stdevpts2)#TODO: edit this t
         rtip2 = xpts[index2]
     end
     if rtip < rtip2
-        p = plot(Shape(shapex,shapey);color = RGBA(linecolor... ,0.2),linecolor = RGBA(0,0,0,0), xlims = xbounds,ylims = ybounds, label = "", legend = :topleft)
-        plot!(xpts,ypts, label = "Cavitation Bounds - SH", color = RGBA(linecolor... ,1.0))
-        plot!(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), label = "")
-        plot!(xpts,ypts2, label = "Cavitation Bounds - Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0))
-        plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = :gray, label = "Propeller Hub")
+        p = plot(xpts,ypts, label = "SH", color = RGBA(linecolor... ,1.0), xlims = xbounds,ylims = ybounds, legend = :topleft, xlabel="Radial Distance From Hub (r/R)", ylabel="Tangential Distance From Leading Edge (d/R)")
+        plot!(Shape(shapex,shapey);color = RGBA(linecolor... ,0.35),linecolor = RGBA(0,0,0,0), label = "SH ± 1σ")
+        plot!(xpts,ypts2, label = "Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0),linestyle = :dash)
+        plot!(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), label = "Smooth Hydrophillic ± 1σ")
+        plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = RGBA(0.25,0.25,0.25,1.0), label = "")#Propeller Hub
         return p
     else
-        p = plot(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), xlims = xbounds,ylims = ybounds, label = "", legend = :topleft)
-        plot!(xpts,ypts2, label = "Cavitation Bounds - Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0))
-        plot!(Shape(shapex,shapey);color = RGBA(linecolor... ,0.2),linecolor = RGBA(0,0,0,0), label = "")
-        plot!(xpts,ypts, label = "Cavitation Bounds - SH", color = RGBA(linecolor... ,1.0))
-        plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = :gray, label = "Propeller Hub")
+        p = plot(xpts,ypts, label = "SH", color = RGBA(linecolor... ,1.0), xlims = xbounds,ylims = ybounds, legend = :topleft, xlabel="Radial Distance From Hub (r/R)", ylabel="Tangential distance From Leading Edge (d/R)")
+        plot!(Shape(shapex,shapey);color = RGBA(linecolor... ,0.35),linecolor = RGBA(0,0,0,0), label = "SH ± 1σ")
+        plot!(xpts,ypts2, label = "Smooth Hydrophillic", color = RGBA(linecolor2... ,1.0),linestyle = :dash)
+        plot!(Shape(shapex2,shapey2);color = RGBA(linecolor2... ,0.2),linecolor = RGBA(0,0,0,0), label = "Smooth Hydrophillic ± 1σ")
+        plot!(Shape([xbounds[1],0.32,0.32,xbounds[1]],[ybounds[1],ybounds[1],ybounds[2],ybounds[2]]),color = RGBA(0.25,0.25,0.25,1.0), label = "")
         return p
     end
 end
@@ -153,7 +153,7 @@ function makespectrumplottable(frequencies,spectrum1,spectrum2)
     return x, y1, y2
 end
 
-function getspectrumaroundspeed(speed,speeds,spectra; speedrange = 100.0)#TODO: make this function
+function getspectrumaroundspeed(speed,speeds,spectra; speedrange = 100.0)
     totalweight = 0.0
     spectrum = zeros(size(spectra)[2])
     for i = 1:1:length(speeds)
@@ -228,15 +228,16 @@ function analyzeaudio()
             spectrum1 = getspectrumaroundspeed(speed,speedsets[i],spectrasets[i])
             spectrum2 = getspectrumaroundspeed(speed,speedsets[i+4],spectrasets[i+4])
             x, y1, y2 = makespectrumplottable(frequencies,spectrum1,spectrum2)
-            p=plot(x,[y1 y2];xscale = :log10, label = ["Hydrophillic" "SH"], legend = :outertopright)#TODO: label with cavitation number
+            p=plot(x,y2;xscale = :log10, label = "SH", color = RGBA(0,0,0,1), legend = :outertopright)#TODO: label with cavitation number
+            plot!(x,y1; label = "Hydrophillic", linestyle = :dash, color = RGBA(0,0,0,1))
             if i == 2
                 shift = 10*log10(hydrophone_avg_slow/(0.5*hydrophone_avgs[i] + 0.5*hydrophone_avgs[i+4]))#adjusts relative amplitude of control data
                 #println(shift)
-                plot!(xc,ycslow .+ shift; label = "No Propeller")
+                #plot!(xc,ycslow .+ shift; label = "No Propeller")
             else
                 shift = 10*log10(hydrophone_avg_fast/(0.5*hydrophone_avgs[i] + 0.5*hydrophone_avgs[i+4]))#adjusts relative amplitude of control data
                 #println(shift)
-                plot!(xc,ycfast .+ shift; label = "No Propeller")
+                #plot!(xc,ycfast .+ shift; label = "No Propeller")
             end
             xlabel!("Frequency (Hz)")
             ylabel!("dB/Hz")
