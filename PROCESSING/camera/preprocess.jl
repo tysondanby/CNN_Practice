@@ -65,11 +65,34 @@ function preprocessimages()
         rawfilename = "DATA/camera/raw/"*imagenames[i]
         preparedfilename = "DATA/camera/prepared/"*imagenames[i][1:end-4]*".png"
         if (!isfile(preparedfilename)) && (!contains(rawfilename,".csv"))
-            tempimg = normalize(load(rawfilename))
-            tempimg = gamma(graynorm(tempimg),g = 1.6)
+            using Measures
+            tempimg = load(rawfilename)#normalize(load(rawfilename))#
+            tempimg = graynorm(tempimg)
+            #Images.save("step1.png",tempimg)
+            #h = fit(Histogram,Float64.(vec(tempimg)); nbins = 150).weights
+            #h = clamp.(h, 1, maximum(h))
+            #p = plot(h,yaxis=:log, fillrange=1, fillalpha=0.5, legend = false, ticks = false, color = RGB(0.3,0.3,0.3), xlabel = "Relative Pixel Intensity", ylabel = "Relative Frequency", size=(600, 400), left_margin = 5mm, bottom_margin = 2mm,xlims = (1,length(h)),ylims = (1,maximum(h)))
+            #savefig(p,"step1hist.png")
+            tempimg = gamma(tempimg,g = 1.6)
+            #Images.save("step2.png",tempimg)
+            #h = fit(Histogram,Float64.(vec(tempimg)); nbins = 150).weights
+            #h = clamp.(h, 1, maximum(h))
+            #p = plot(h,yaxis=:log, fillrange=1, fillalpha=0.5, legend = false, ticks = false, color = RGB(0.3,0.3,0.3), xlabel = "Relative Pixel Intensity", ylabel = "Relative Frequency", size=(600, 400), left_margin = 5mm, bottom_margin = 2mm,xlims = (1,length(h)),ylims = (1,maximum(h)))
+            #savefig(p,"step2hist.png")
             tempimg = histogramadjust(tempimg,percentile(vec(tempimg), 99.5), .90)#TODO, apply these two steps the same way for each propeller on a given day.
+            #Images.save("step3.png",tempimg)
+            #h = fit(Histogram,Float64.(vec(tempimg)); nbins = 150).weights
+            #h = clamp.(h, 1, maximum(h))
+            #p = plot(h,yaxis=:log, fillrange=1, fillalpha=0.5, legend = false, ticks = false, color = RGB(0.3,0.3,0.3), xlabel = "Relative Pixel Intensity", ylabel = "Relative Frequency", size=(600, 400), left_margin = 5mm, bottom_margin = 2mm,xlims = (1,length(h)),ylims = (1,maximum(h)))
+            #savefig(p,"step3hist.png")
             tempimg = histogramadjust(tempimg,percentile(vec(tempimg), 75), .02)
+            #Images.save("step4.png",tempimg)
+            #h = fit(Histogram,Float64.(vec(tempimg)); nbins = 150).weights
+            #h = clamp.(h, 1, maximum(h))
+            #p = plot(h,yaxis=:log, fillrange=1, fillalpha=0.5, legend = false, ticks = false, color = RGB(0.3,0.3,0.3), xlabel = "Relative Pixel Intensity", ylabel = "Relative Frequency", size=(600, 400), left_margin = 5mm, bottom_margin = 2mm,xlims = (1,length(h)),ylims = (1,maximum(h)))
+            #savefig(p,"step4hist.png")
             croppedimg = croparoundpropeller(tempimg,targetsize)
+            #Images.save("step5.png",tempimg)
             Images.save(preparedfilename,croppedimg) #TODO: Save
         end
         @lock re_lock progress = progress + 1

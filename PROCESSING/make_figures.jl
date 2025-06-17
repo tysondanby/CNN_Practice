@@ -245,3 +245,52 @@ function analyzeaudio()
         end
     end
 end
+
+
+
+#-----Figures only for demonstration (thesis figures)
+
+#outer blades
+using Measures
+scalefactor = 0.5
+thetas = collect(0:0.01pi:2pi)
+rhub = ones(length(thetas))*0.3
+propcolor = RGB(0.3,0.3,0.3)
+rprop = similar(rhub)
+offset = 0.2pi
+for i = 1:1:length(thetas)
+    theta = deepcopy(thetas[i])
+    if theta > pi
+        theta = theta - pi
+    end
+    if (theta > offset) && (theta < (0.6667*pi+offset))
+        rprop[i] = 1.0
+    else
+        rprop[i] = 0.0
+    end
+end
+function thetacav(r)
+    thetaval = 0.2*(0.1/((1-r)^1.5) - 0.2)
+    if thetaval < 0.0
+        thetaval = 0.0
+    elseif thetaval > pi
+        thetaval = pi
+    end
+    return thetaval + offset
+end
+rs = collect(0.3:0.0025:0.99)
+ths = @. thetacav(rs)
+rs =vcat(rs, collect(0.99:0.00025:1.0))
+ths = vcat(ths,collect(pi:-pi/40:0.0) .+ offset)
+p = plot(thetas, rprop; proj = :polar, axes = false, legend = false, ticks = false, size = (1000,1000))
+plot!(thetas, rhub*6;fillrange=0, fillalpha=1.0, color = :black)
+plot!(thetas, rprop;fillrange=0, fillalpha=1.0, color = propcolor)
+plot!(thetas, rhub;fillrange=0, fillalpha=1.0, color = propcolor)
+plot!(thetas, rhub*0.4;fillrange=0, fillalpha=1.0, color = :black)
+plot!(thetas, rhub; color = :black)
+plot!(Shape((rs .* cos.(ths) .*scalefactor),(rs .* sin.(ths) .*scalefactor)); color = :white)
+plot!(Shape((rs .* cos.(ths) .* -scalefactor),(rs .* sin.(ths) .* -scalefactor)); color = :white)
+savefig(p,"ContourCircle.png")
+
+p2 = plot(rs,(ths .- offset ) .* rs; color = :black, legend = false, xlabel = "r/R", ylabel = "d/R", xlims = (0,1))
+savefig(p2,"Contourline.png")

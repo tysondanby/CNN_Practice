@@ -57,6 +57,7 @@ function getsounddatafromwav(filename; segmentlength = 0.5, segmentfrequency = 0
         lastindex = topindicies[i]
         segpts = pts[firstindex:lastindex]
         psdx = (((abs.(fft(segpts)))[1:Int64(length(segpts)/2)]).^2)./ (N*fs)
+        global FFT = fft(segpts)
         psdx[2:end-1] = 2*psdx[2:end-1]
         spectra_psd[i,:] = 10.0*log10.(psdx)#PSD dB/Hz
     end

@@ -289,6 +289,7 @@ end
 
 function normalize(img::Matrix{RGB{T}}) where T<:Union{AbstractFloat, FixedPoint} #make max fixed point 1
     maxcolor=typemax(typeof(img[1,1].r))
+    #println(maxcolor)
     return img ./ maxcolor
 end
 
